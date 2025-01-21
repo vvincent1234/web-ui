@@ -20,7 +20,7 @@ from langchain_core.messages import (
     AIMessage
 )
 
-from .custom_prompts import CustomAgentMessagePrompt
+from .custom_prompts import CustomAgentMessagePrompt, get_monitor_system_prompt, get_monitor_user_message
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +59,10 @@ class CustomMassageManager(MessageManager):
         self._add_message_with_tokens(self.system_prompt)
         tool_calls = [
             {
-                'name': 'CustomAgentOutput',
+                'name': 'AgentOutput',
                 'args': {
                     'current_state': {
-                        'prev_action_evaluation': 'Unknown - No previous actions to evaluate.',
                         'important_contents': '',
-                        'completed_contents': '',
                         'thought': 'Now Google is open. Need to type OpenAI to search.',
                         'summary': 'Type OpenAI to search.',
                     },
@@ -118,4 +116,36 @@ class CustomMassageManager(MessageManager):
             max_error_length=self.max_error_length,
             step_info=step_info,
         ).get_user_message()
+        self._add_message_with_tokens(state_message)
+
+
+class MonitorMassageManager(MessageManager):
+    def __init__(self):
+        self.history = MessageHistory()
+        self.system_prompt = get_monitor_system_prompt()
+        self._add_message_with_tokens(self.system_prompt)
+
+    def add_state_message(
+            self,
+            state: BrowserState,
+            result: Optional[List[ActionResult]] = None,
+            step_info: Optional[AgentStepInfo] = None,
+    ) -> None:
+        """Add browser state as human message"""
+
+        # if keep in memory, add to directly to history and add state without result
+        if result:
+            for r in result:
+                if r.include_in_memory:
+                    if r.extracted_content:
+                        msg = HumanMessage(content=str(r.extracted_content))
+                        self._add_message_with_tokens(msg)
+                    if r.error:
+                        msg = HumanMessage(
+                            content=str(r.error)[-self.max_error_length:]
+                        )
+                        self._add_message_with_tokens(msg)
+
+        # otherwise add state message and result to next message (which will not stay in memory)
+        state_message = get_monitor_user_message(state, step_info, self.include_attributes)
         self._add_message_with_tokens(state_message)

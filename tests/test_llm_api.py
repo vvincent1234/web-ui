@@ -115,6 +115,35 @@ def test_deepseek_model():
     print(ai_msg.content)
 
 
+def test_deepseek_r1_model():
+    from openai import OpenAI
+    from langchain_core.messages import HumanMessage
+    from src.utils import utils
+
+    llm = OpenAI(
+        base_url=os.getenv("DEEPSEEK_ENDPOINT", ""),
+        api_key=os.getenv("DEEPSEEK_API_KEY", "")
+    )
+    # Round 1
+    messages = [{"role": "user", "content": "9.11 and 9.8, which is greater?"}]
+    response = llm.chat.completions.create(
+        model="deepseek-reasoner",
+        messages=messages
+    )
+
+    reasoning_content = response.choices[0].message.reasoning_content
+    content = response.choices[0].message.content
+    pdb.set_trace()
+    # Round 2
+    messages.append({'role': 'assistant', 'content': content})
+    messages.append({'role': 'user', 'content': "How many Rs are there in the word 'strawberry'?"})
+    response = llm.chat.completions.create(
+        model="deepseek-reasoner",
+        messages=messages
+    )
+    pdb.set_trace()
+
+
 def test_ollama_model():
     from langchain_ollama import ChatOllama
 
@@ -128,4 +157,5 @@ if __name__ == '__main__':
     # test_gemini_model()
     # test_azure_openai_model()
     # test_deepseek_model()
-    test_ollama_model()
+    # test_ollama_model()
+    test_deepseek_r1_model()

@@ -24,10 +24,7 @@ class CustomAgentStepInfo:
 
 class CustomAgentBrain(BaseModel):
     """Current state of the agent"""
-
-    prev_action_evaluation: str
     important_contents: str
-    completed_contents: str
     thought: str
     summary: str
 
@@ -45,7 +42,7 @@ class CustomAgentOutput(AgentOutput):
 
     @staticmethod
     def type_with_custom_actions(
-        custom_actions: Type[ActionModel],
+            custom_actions: Type[ActionModel],
     ) -> Type["CustomAgentOutput"]:
         """Extend actions with custom actions"""
         return create_model(

@@ -38,7 +38,7 @@ from langchain_core.messages import (
 )
 from src.utils.agent_state import AgentState
 
-from .custom_massage_manager import CustomMassageManager
+from .custom_massage_manager import CustomMassageManager, MonitorMassageManager
 from .custom_views import CustomAgentOutput, CustomAgentStepInfo
 
 logger = logging.getLogger(__name__)
@@ -49,11 +49,13 @@ class CustomAgent(Agent):
             self,
             task: str,
             llm: BaseChatModel,
+            llm_monitor: Optional[BaseChatModel] = None,
             add_infos: str = "",
             browser: Browser | None = None,
             browser_context: BrowserContext | None = None,
             controller: Controller = Controller(),
             use_vision: bool = True,
+            monitor_use_vision: bool = False,
             save_conversation_path: Optional[str] = None,
             max_failures: int = 5,
             retry_delay: int = 10,
@@ -108,6 +110,11 @@ class CustomAgent(Agent):
             max_actions_per_step=self.max_actions_per_step,
             tool_call_in_content=tool_call_in_content,
         )
+
+        # LLM monitor
+        self.llm_monitor = llm_monitor
+        self.monitor_use_vision = monitor_use_vision
+        self.monitor_message_manager = MonitorMassageManager()
 
     def _setup_action_models(self) -> None:
         """Setup dynamic action models from controller's registry"""
@@ -203,20 +210,29 @@ class CustomAgent(Agent):
             self.message_manager.add_state_message(state, self._last_result, step_info)
             input_messages = self.message_manager.get_messages()
             model_output = await self.get_next_action(input_messages)
-            self.update_step_info(model_output, step_info)
-            logger.info(f"🧠 All Memory: {step_info.memory}")
             self._save_conversation(input_messages, model_output)
             self.message_manager._remove_last_state_message()  # we dont want the whole state in the chat history
             self.message_manager.add_model_output(model_output)
-
+            if self.llm_monitor:
+                self.monitor_message_manager.add_model_output(model_output)
             result: list[ActionResult] = await self.controller.multi_act(
                 model_output.action, self.browser_context
             )
             self._last_result = result
 
+            # monitor agent here
+            if self.llm_monitor:
+                state = await self.browser_context.get_state(use_vision=self.monitor_use_vision)
+                self.monitor_message_manager.add_state_message(state, self._last_result, step_info)
+                monitor_input_messages = self.monitor_message_manager.get_messages()
+                monitor_model_output = await self.llm_monitor.ainvoke(monitor_input_messages)
+
+
             if len(result) > 0 and result[-1].is_done:
                 logger.info(f"📄 Result: {result[-1].extracted_content}")
 
+            self.update_step_info(model_output, step_info)
+            logger.info(f"🧠 All Memory: {step_info.memory}")
             self.consecutive_failures = 0
 
         except Exception as e:
@@ -236,6 +252,7 @@ class CustomAgent(Agent):
                     )
             if state:
                 self._make_history_item(model_output, state, result)
+
     def create_history_gif(
             self,
             output_path: str = 'agent_history.gif',

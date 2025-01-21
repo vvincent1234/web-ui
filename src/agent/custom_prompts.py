@@ -23,9 +23,7 @@ class CustomSystemPrompt(SystemPrompt):
     1. RESPONSE FORMAT: You must ALWAYS respond with valid JSON in this exact format:
        {
          "current_state": {
-           "prev_action_evaluation": "Success|Failed|Unknown - Analyze the current elements and the image to check if the previous goals/actions are successful like intended by the task. Ignore the action result. The website is the ground truth. Also mention if something unexpected happened like new suggestions in an input field. Shortly state why/why not. Note that the result you output must be consistent with the reasoning you output afterwards. If you consider it to be 'Failed,' you should reflect on this during your thought.",
            "important_contents": "Output important contents closely related to user\'s instruction or task on the current page. If there is, please output the contents. If not, please output empty string ''.",
-           "completed_contents": "Update the input Task Progress. Completed contents is a general summary of the current contents that have been completed. Just summarize the contents that have been actually completed based on the current page and the history operations. Please list each completed item individually, such as: 1. Input username. 2. Input Password. 3. Click confirm button",
            "thought": "Think about the requirements that have been completed in previous operations and the requirements that need to be completed in the next one operation. If the output of prev_action_evaluation is 'Failed', please reflect and output your reflection here. If you think you have entered the wrong page, consider to go back to the previous page in next action.",
            "summary": "Please generate a brief natural language description for the operation in next actions based on your Thought."
          },
@@ -162,7 +160,8 @@ class CustomAgentMessagePrompt:
         self.step_info = step_info
 
     def get_user_message(self) -> HumanMessage:
-        state_description = f"""
+        state_description = f"Current Step: {self.step_info.step_number}/{self.step_info.max_steps}\n"
+        state_description += f"""
     1. Task: {self.step_info.task}
     2. Hints(Optional): 
     {self.step_info.add_infos}
@@ -203,3 +202,71 @@ class CustomAgentMessagePrompt:
             )
 
         return HumanMessage(content=state_description)
+
+
+def get_monitor_system_prompt() -> SystemMessage:
+    system_prompt = """
+    You are a Monitor Agent, overseeing other agents to ensure successful task completion. You have three key functions:
+
+    1. **Planner:** Based on the user's task and the current state, you will create an execution plan outlining the next steps for the agents. Analyze the overall goal and available information to create a roadmap for efficient task completion.
+
+    2. **Progress Tracker:**  Maintain a global view of the task's actual progress. Update the task completion status using the current state and historical information. This includes identifying dependencies between subtasks and understanding the overall progress towards the ultimate objective.
+
+    3. **Troubleshooter:** Evaluate the success of each action by comparing the state before and after execution. If an action fails, analyze the situation and provide specific suggestions for modification and improvement to ensure successful execution. Provide actionable advice to help the agents get back on track.
+
+    In short: **Plan** the future steps, **Track** the real-time progress, and **Troubleshoot** actions to ensure successful task execution. You are the key to ensuring everything runs smoothly and efficiently.
+    """
+    return SystemMessage(content=system_prompt)
+
+
+def get_monitor_user_message(state: BrowserState, step_info: Optional[CustomAgentStepInfo] = None,
+                             include_attributes: list[str] = []) -> HumanMessage:
+    state_description = f"Current Step: {step_info.step_number + 1}/{step_info.max_steps}\n"
+    state_description += f"Task: {step_info.task} \n"
+
+    interactive_elements_str = state.element_tree.clickable_elements_to_string(include_attributes=include_attributes)
+    state_description += f"Interactive elements: {interactive_elements_str}\n"
+
+    state_description += """
+    You are an agent monitoring the execution of a user's task. Your role is to provide structured updates on the task's progress, future plans, and evaluation of past actions.
+
+    Your response must be in JSON format with the following keys:
+    
+    a. 'prev_action_evaluation': An assessment of the last action taken by the agent. Select one of Success, Failed or Unknown to output. Indicate if the action was successful or not and include suggestions if it was not.
+    b. 'plans': A list of future steps required to complete the user's task. Describe in natural language what needs to be done.
+    c. 'task_progress': A list of sub-tasks that have been successfully completed so far. Describe each completed task.
+    d. 'is_done': True or False, indicating if the user's task has been fully completed. Set this to True only when all requirements of the task have been fulfilled.
+
+    Interactive Elements are provided in the following format:
+
+    Interactive Elements: List in the format:
+    index[:]<element_type>element_text</element_type>
+
+    index: Numeric identifier for interaction
+    element_type: HTML element type (button, input, etc.)
+    element_text: Visible text or element description
+
+    Example Response:
+    {
+        "prev_action_evaluation": "Unknown - No previous actions to evaluate.",
+        "plans": ["Click the 'Next' button to navigate to the next page", "Enter the search query in the search bar",... ],
+        "task_progress": ["Opened the home page", "Navigated to product listing page",...],
+        "is_done": false
+    }
+
+    """
+
+    if state.screenshot:
+        # Format message for vision model
+        return HumanMessage(
+            content=[
+                {"type": "text", "text": state_description},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{state.screenshot}"
+                    },
+                },
+            ]
+        )
+    return HumanMessage(content=state_description)
