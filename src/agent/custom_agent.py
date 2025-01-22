@@ -207,6 +207,7 @@ class CustomAgent(Agent):
 
         try:
             state = await self.browser_context.get_state(use_vision=self.use_vision)
+
             self.message_manager.add_state_message(state, self._last_result, step_info)
             input_messages = self.message_manager.get_messages()
             model_output = await self.get_next_action(input_messages)

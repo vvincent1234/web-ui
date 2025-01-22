@@ -206,55 +206,54 @@ class CustomAgentMessagePrompt:
 
 def get_monitor_system_prompt() -> SystemMessage:
     system_prompt = """
-    You are a Monitor Agent, overseeing other agents to ensure successful task completion. You have three key functions:
+    You are an AI assistant tasked with monitoring the execution of a user's task. Your role is to provide structured updates on the evaluation of past actions, the task's progress, future plans, and overall task status. Base your analysis on the current user input data and historical information.
 
-    1. **Planner:** Based on the user's task and the current state, you will create an execution plan outlining the next steps for the agents. Analyze the overall goal and available information to create a roadmap for efficient task completion.
+    USER INPUT STRUCTURE:
+    1. Current Step: The current step number and the total number of steps in the task (e.g., "Step 3 of 10").
+    2. Task: The user's instructions that need to be completed.
+    3. Interactive Elements: A list of interactive elements in the following format:
+       index[:]<element_type>element_text</element_type>
+        - index: A numeric identifier for the interactive element.
+        - element_type: The HTML element type (e.g., button, input, link).
+        - element_text: The visible text or description of the element.
 
-    2. **Progress Tracker:**  Maintain a global view of the task's actual progress. Update the task completion status using the current state and historical information. This includes identifying dependencies between subtasks and understanding the overall progress towards the ultimate objective.
+    Example:
+    33[:]<button>Submit Form</button>
+    _[:] Non-interactive text
 
-    3. **Troubleshooter:** Evaluate the success of each action by comparing the state before and after execution. If an action fails, analyze the situation and provide specific suggestions for modification and improvement to ensure successful execution. Provide actionable advice to help the agents get back on track.
 
-    In short: **Plan** the future steps, **Track** the real-time progress, and **Troubleshoot** actions to ensure successful task execution. You are the key to ensuring everything runs smoothly and efficiently.
+    Notes:
+    - Only elements with numeric indexes are interactive
+    - _[:] elements provide context but cannot be interacted with
+
+
+    Your output MUST be a JSON object with the following keys:
+
+    a. 'prev_action_evaluation': An assessment of the last action taken by the agent. Choose from "Success", "Failed", or "Unknown". If the action failed, provide a reason and suggestions for improvement.
+    b. 'task_progress': A list of sub-tasks that have been successfully completed so far. Describe each completed sub-task. Output an empty list if no tasks are completed.
+    c. 'plans': A list of future steps required to complete the user's task. Describe these steps in natural language.
+    d. 'is_done': A boolean value (True or False) indicating whether the user's task has been fully completed. Set to True ONLY when all task requirements have been met.
+
+    Example Response:
+    {
+        "prev_action_evaluation": "Unknown - No previous actions to evaluate.",
+        "task_progress": ["Opened the home page", "Navigated to product listing page", ...],
+        "plans": ["Click the 'Next' button to navigate to the next page", "Enter the search query in the search bar", ...],
+        "is_done": false
+    }
+
+    Your reasoning MUST be based on the current browser state and historical information. Evaluate 'prev_action_evaluation', 'task_progress', 'plans', and 'is_done' in sequence.
     """
     return SystemMessage(content=system_prompt)
 
 
 def get_monitor_user_message(state: BrowserState, step_info: Optional[CustomAgentStepInfo] = None,
                              include_attributes: list[str] = []) -> HumanMessage:
-    state_description = f"Current Step: {step_info.step_number + 1}/{step_info.max_steps}\n"
-    state_description += f"Task: {step_info.task} \n"
+    state_description = f"1. Current Step: {step_info.step_number + 1}/{step_info.max_steps}\n"
+    state_description += f"2. Task: {step_info.task} \n"
 
     interactive_elements_str = state.element_tree.clickable_elements_to_string(include_attributes=include_attributes)
-    state_description += f"Interactive elements: {interactive_elements_str}\n"
-
-    state_description += """
-    You are an agent monitoring the execution of a user's task. Your role is to provide structured updates on the task's progress, future plans, and evaluation of past actions.
-
-    Your response must be in JSON format with the following keys:
-    
-    a. 'prev_action_evaluation': An assessment of the last action taken by the agent. Select one of Success, Failed or Unknown to output. Indicate if the action was successful or not and include suggestions if it was not.
-    b. 'plans': A list of future steps required to complete the user's task. Describe in natural language what needs to be done.
-    c. 'task_progress': A list of sub-tasks that have been successfully completed so far. Describe each completed task.
-    d. 'is_done': True or False, indicating if the user's task has been fully completed. Set this to True only when all requirements of the task have been fulfilled.
-
-    Interactive Elements are provided in the following format:
-
-    Interactive Elements: List in the format:
-    index[:]<element_type>element_text</element_type>
-
-    index: Numeric identifier for interaction
-    element_type: HTML element type (button, input, etc.)
-    element_text: Visible text or element description
-
-    Example Response:
-    {
-        "prev_action_evaluation": "Unknown - No previous actions to evaluate.",
-        "plans": ["Click the 'Next' button to navigate to the next page", "Enter the search query in the search bar",... ],
-        "task_progress": ["Opened the home page", "Navigated to product listing page",...],
-        "is_done": false
-    }
-
-    """
+    state_description += f"3. Interactive elements: \n{interactive_elements_str}\n"
 
     if state.screenshot:
         # Format message for vision model

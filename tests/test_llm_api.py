@@ -139,8 +139,18 @@ def test_deepseek_r1_model():
     messages.append({'role': 'user', 'content': "How many Rs are there in the word 'strawberry'?"})
     response = llm.chat.completions.create(
         model="deepseek-reasoner",
-        messages=messages
+        messages=messages,
+        stream=True
     )
+    reasoning_content = ""
+    content = ""
+
+    for chunk in response:
+        if chunk.choices[0].delta.reasoning_content:
+            reasoning_content += chunk.choices[0].delta.reasoning_content
+            print(f"Reasoning: {reasoning_content}", end="", flush=True)
+        if chunk.choices[0].delta.content:
+            content += chunk.choices[0].delta.content
     pdb.set_trace()
 
 
