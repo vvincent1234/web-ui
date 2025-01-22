@@ -8,7 +8,7 @@ import json
 import logging
 import pdb
 import traceback
-from typing import Optional, Type
+from typing import Optional, Type, Any
 from PIL import Image, ImageDraw, ImageFont
 import os
 import base64
@@ -281,8 +281,6 @@ class CustomAgent(Agent):
             self.monitor_message_manager.add_ai_message(monitor_ouput)
             if step_info.is_done:
                 logger.info("🎉 Task is done")
-                state = None
-                return
             state = await self.browser_context.get_state(use_vision=self.use_vision)
             self.message_manager.add_state_message(
                 state, self._last_result, step_info)

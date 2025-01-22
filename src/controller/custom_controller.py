@@ -4,10 +4,15 @@
 # @ProjectName: browser-use-webui
 # @FileName: custom_action.py
 
+import logging
 import pyperclip
+from main_content_extractor import MainContentExtractor
 from browser_use.agent.views import ActionResult
 from browser_use.browser.context import BrowserContext
 from browser_use.controller.service import Controller
+from browser_use.controller.views import ExtractPageContentAction
+
+logger = logging.getLogger(__name__)
 
 
 class CustomController(Controller):
@@ -31,3 +36,20 @@ class CustomController(Controller):
             await page.keyboard.type(text)
 
             return ActionResult(extracted_content=text)
+
+        @self.registry.action(
+            'Extract page content to get the text or markdown ',
+            param_model=ExtractPageContentAction,
+            requires_browser=True,
+        )
+        async def extract_content(params: ExtractPageContentAction, browser: BrowserContext):
+            page = await browser.get_current_page()
+
+            content = MainContentExtractor.extract(  # type: ignore
+                html=await page.content(),
+                output_format=params.value,
+            )
+            msg = f'📄  Extracted page content\n: {content}\n'
+            logger.info(msg)
+            # set the extracted content to the memory
+            return ActionResult(extracted_content=msg, include_in_memory=True)

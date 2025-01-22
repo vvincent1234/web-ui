@@ -297,7 +297,7 @@ async def test_browser_use_custom_v2():
             )
         )
         agent = CustomAgent(
-            task="Search for relevant news about DeepSeek-R1, compile relative information into a text content, and send it to 1450060993@qq.com via Google Mail.",
+            task="Search for DeepSeek-R1, gather information about it, including model introduction and GitHub star count, and then compile this information into a formatted email and send it to vincent19901026@gmail.com using Gmail.",
             add_infos="1. Remember to press Enter key after typing email address.",  # some hints for llm to complete the task
             llm=llm,
             llm_monitor=llm_monitor,
