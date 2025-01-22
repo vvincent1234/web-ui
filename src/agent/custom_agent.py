@@ -49,7 +49,7 @@ class CustomAgent(Agent):
             self,
             task: str,
             llm: BaseChatModel,
-            llm_monitor: Optional[BaseChatModel] = None,
+            llm_monitor,
             add_infos: str = "",
             browser: Browser | None = None,
             browser_context: BrowserContext | None = None,
@@ -114,27 +114,34 @@ class CustomAgent(Agent):
         # LLM monitor
         self.llm_monitor = llm_monitor
         self.monitor_use_vision = monitor_use_vision
-        self.monitor_message_manager = MonitorMassageManager()
+        self.monitor_message_manager = MonitorMassageManager(max_input_len=11)
+        self._last_action = None
 
     def _setup_action_models(self) -> None:
         """Setup dynamic action models from controller's registry"""
         # Get the dynamic action model from controller's registry
         self.ActionModel = self.controller.registry.create_action_model()
         # Create output model with the dynamic actions
-        self.AgentOutput = CustomAgentOutput.type_with_custom_actions(self.ActionModel)
+        self.AgentOutput = CustomAgentOutput.type_with_custom_actions(
+            self.ActionModel)
 
-    def _log_response(self, response: CustomAgentOutput) -> None:
+    def _log_response(self, response: CustomAgentOutput, step_info: CustomAgentStepInfo) -> None:
         """Log the model's response"""
-        if "Success" in response.current_state.prev_action_evaluation:
+        if "Success" in step_info.prev_action_evaluation:
             emoji = "✅"
-        elif "Failed" in response.current_state.prev_action_evaluation:
+        elif "Failed" in step_info.prev_action_evaluation:
             emoji = "❌"
         else:
             emoji = "🤷"
 
-        logger.info(f"{emoji} Eval: {response.current_state.prev_action_evaluation}")
-        logger.info(f"🧠 New Memory: {response.current_state.important_contents}")
-        logger.info(f"⏳ Task Progress: {response.current_state.completed_contents}")
+        logger.info(
+            f"{emoji} Eval: {step_info.prev_action_evaluation}")
+        logger.info(
+            f"⏳ Task Progress: \n{step_info.task_progress}")
+        logger.info(
+            f"📌 Plans: \n{step_info.plans}")
+        logger.info(
+            f"🧠 New Memory: {response.current_state.important_contents}")
         logger.info(f"🤔 Thought: {response.current_state.thought}")
         logger.info(f"🎯 Summary: {response.current_state.summary}")
         for i, action in enumerate(response.action):
@@ -160,21 +167,51 @@ class CustomAgent(Agent):
         ):
             step_info.memory += important_contents + "\n"
 
-        completed_contents = model_output.current_state.completed_contents
-        if completed_contents and "None" not in completed_contents:
-            step_info.task_progress = completed_contents
+    def update_monitor_step_info(
+            self, model_output, step_info: CustomAgentStepInfo = None
+    ):
+        """
+        update step info
+        """
+        if step_info is None:
+            return
+        if model_output:
+            try:
+                model_output = json.loads(model_output.replace(
+                    "```json", "").replace("```", ""))
+            except Exception as e:
+                logger.error(f"Error parsing monitor output: {e}")
+                return
+        else:
+            return
+        if model_output.get("prev_action_evaluation", ""):
+            step_info.prev_action_evaluation = model_output["prev_action_evaluation"]
+        if model_output.get("task_progress", []):
+            task_progress = ""
+            for i, task in enumerate(model_output["task_progress"]):
+                task_progress += f"{i + 1}. {task}\n"
+            step_info.task_progress = task_progress
+        if model_output.get("plans", []):
+            plans = ""
+            for i, plan in enumerate(model_output["plans"]):
+                plans += f"{i + 1}. {plan}\n"
+            step_info.plans = plans
+        if model_output.get("is_done", False):
+            step_info.is_done = True
 
     @time_execution_async("--get_next_action")
-    async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
+    async def get_next_action(self, input_messages: list[BaseMessage], step_info: CustomAgentStepInfo) -> AgentOutput:
         """Get next action from LLM based on current state"""
         try:
-            structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
-            response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
+            structured_llm = self.llm.with_structured_output(
+                self.AgentOutput, include_raw=True)
+            # type: ignore
+            response: dict[str, Any] = await structured_llm.ainvoke(input_messages)
 
             parsed: AgentOutput = response['parsed']
             # cut the number of actions to max_actions_per_step
             parsed.action = parsed.action[: self.max_actions_per_step]
-            self._log_response(parsed)
+            self._log_response(parsed, step_info)
             self.n_steps += 1
 
             return parsed
@@ -183,19 +220,48 @@ class CustomAgent(Agent):
             # and Manually parse the response. Temporarily solution for DeepSeek
             ret = self.llm.invoke(input_messages)
             if isinstance(ret.content, list):
-                parsed_json = json.loads(ret.content[0].replace("```json", "").replace("```", ""))
+                parsed_json = json.loads(ret.content[0].replace(
+                    "```json", "").replace("```", ""))
             else:
-                parsed_json = json.loads(ret.content.replace("```json", "").replace("```", ""))
+                parsed_json = json.loads(ret.content.replace(
+                    "```json", "").replace("```", ""))
             parsed: AgentOutput = self.AgentOutput(**parsed_json)
             if parsed is None:
                 raise ValueError(f'Could not parse response.')
 
             # cut the number of actions to max_actions_per_step
             parsed.action = parsed.action[: self.max_actions_per_step]
-            self._log_response(parsed)
+            self._log_response(parsed, step_info)
             self.n_steps += 1
 
             return parsed
+
+    def get_monitor_result(self):
+        """
+        Get the monitor result
+        """
+        try:
+            input_messages = self.monitor_message_manager.get_message_history()
+            response = self.llm_monitor.chat.completions.create(
+                model="deepseek-reasoner",
+                messages=input_messages,
+                stream=True
+            )
+            reasoning_content = ""
+            content = ""
+            print("🔍 <Start Deep Thinking>")
+            for chunk in response:
+                if chunk.choices[0].delta.reasoning_content:
+                    reasoning_content += chunk.choices[0].delta.reasoning_content
+                    # debug
+                    print(f"{chunk.choices[0].delta.reasoning_content}", end="")
+                if chunk.choices[0].delta.content:
+                    content += chunk.choices[0].delta.content
+            print("\n🔍 <End Deep Thinking>")
+            return content
+        except Exception as e:
+            logger.error(f"Error getting monitor result: {e}")
+            return ""
 
     @time_execution_async("--step")
     async def step(self, step_info: Optional[CustomAgentStepInfo] = None) -> None:
@@ -206,34 +272,36 @@ class CustomAgent(Agent):
         result: list[ActionResult] = []
 
         try:
+            # Monitor agent here
+            monitor_state = await self.browser_context.get_state(use_vision=self.monitor_use_vision)
+            self.monitor_message_manager.add_state_message(
+                monitor_state, step_info, self._last_action, self._last_result, self.include_attributes)
+            monitor_ouput = self.get_monitor_result()
+            self.update_monitor_step_info(monitor_ouput, step_info)
+            self.monitor_message_manager.add_ai_message(monitor_ouput)
+            if step_info.is_done:
+                logger.info("🎉 Task is done")
+                state = None
+                return
             state = await self.browser_context.get_state(use_vision=self.use_vision)
-
-            self.message_manager.add_state_message(state, self._last_result, step_info)
+            self.message_manager.add_state_message(
+                state, self._last_result, step_info)
             input_messages = self.message_manager.get_messages()
-            model_output = await self.get_next_action(input_messages)
+            model_output = await self.get_next_action(input_messages, step_info)
             self._save_conversation(input_messages, model_output)
-            self.message_manager._remove_last_state_message()  # we dont want the whole state in the chat history
+            # we dont want the whole state in the chat history
+            self.message_manager._remove_last_state_message()
             self.message_manager.add_model_output(model_output)
-            if self.llm_monitor:
-                self.monitor_message_manager.add_model_output(model_output)
             result: list[ActionResult] = await self.controller.multi_act(
                 model_output.action, self.browser_context
             )
             self._last_result = result
-
-            # monitor agent here
-            if self.llm_monitor:
-                state = await self.browser_context.get_state(use_vision=self.monitor_use_vision)
-                self.monitor_message_manager.add_state_message(state, self._last_result, step_info)
-                monitor_input_messages = self.monitor_message_manager.get_messages()
-                monitor_model_output = await self.llm_monitor.ainvoke(monitor_input_messages)
-
-
+            self._last_action = model_output.action
             if len(result) > 0 and result[-1].is_done:
                 logger.info(f"📄 Result: {result[-1].extracted_content}")
 
             self.update_step_info(model_output, step_info)
-            logger.info(f"🧠 All Memory: {step_info.memory}")
+            logger.info(f"🧠 All Memory:\n {step_info.memory}")
             self.consecutive_failures = 0
 
         except Exception as e:
@@ -289,7 +357,8 @@ class CustomAgent(Agent):
                     import platform
                     if platform.system() == "Windows":
                         # Need to specify the abs font path on Windows
-                        font_name = os.path.join(os.getenv("WIN_FONT_DIR", "C:\\Windows\\Fonts"), font_name + ".ttf")
+                        font_name = os.path.join(
+                            os.getenv("WIN_FONT_DIR", "C:\\Windows\\Fonts"), font_name + ".ttf")
                     regular_font = ImageFont.truetype(font_name, font_size)
                     title_font = ImageFont.truetype(font_name, title_font_size)
                     goal_font = ImageFont.truetype(font_name, goal_font_size)
@@ -316,7 +385,8 @@ class CustomAgent(Agent):
                 logo_height = 150
                 aspect_ratio = logo.width / logo.height
                 logo_width = int(logo_height * aspect_ratio)
-                logo = logo.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
+                logo = logo.resize((logo_width, logo_height),
+                                   Image.Resampling.LANCZOS)
             except Exception as e:
                 logger.warning(f'Could not load logo: {e}')
 
@@ -386,8 +456,13 @@ class CustomAgent(Agent):
                 step_number=1,
                 max_steps=max_steps,
                 memory="",
+                prev_action_evaluation="",
                 task_progress="",
+                plans="",
+                is_done=False,
             )
+            
+            self.monitor_message_manager.clear()
 
             for step in range(max_steps):
                 # 1) Check if stop requested
@@ -407,7 +482,7 @@ class CustomAgent(Agent):
                 # 3) Do the step
                 await self.step(step_info)
 
-                if self.history.is_done():
+                if step_info.is_done and self.history.is_done():
                     if (
                             self.validate_output and step < max_steps - 1
                     ):  # if last step, we dont need to validate
@@ -464,7 +539,8 @@ class CustomAgent(Agent):
             stop_history = AgentHistory(
                 model_output=None,
                 state=state,
-                result=[ActionResult(extracted_content=None, error=None, is_done=True)]
+                result=[ActionResult(extracted_content=None,
+                                     error=None, is_done=True)]
             )
             self.history.history.append(stop_history)
 
@@ -475,7 +551,8 @@ class CustomAgent(Agent):
             stop_history = AgentHistory(
                 model_output=None,
                 state=state,
-                result=[ActionResult(extracted_content=None, error=None, is_done=True)]
+                result=[ActionResult(extracted_content=None,
+                                     error=None, is_done=True)]
             )
             self.history.history.append(stop_history)
 

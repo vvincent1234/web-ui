@@ -19,7 +19,11 @@ class CustomAgentStepInfo:
     task: str
     add_infos: str
     memory: str
+    prev_action_evaluation: str
     task_progress: str
+    plans: str
+    is_done: bool
+    
 
 
 class CustomAgentBrain(BaseModel):

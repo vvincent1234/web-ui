@@ -7,7 +7,7 @@
 from typing import List, Optional
 
 from browser_use.agent.prompts import SystemPrompt
-from browser_use.agent.views import ActionResult
+from browser_use.agent.views import ActionResult, ActionModel
 from browser_use.browser.views import BrowserState
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -23,8 +23,8 @@ class CustomSystemPrompt(SystemPrompt):
     1. RESPONSE FORMAT: You must ALWAYS respond with valid JSON in this exact format:
        {
          "current_state": {
-           "important_contents": "Output important contents closely related to user\'s instruction or task on the current page. If there is, please output the contents. If not, please output empty string ''.",
-           "thought": "Think about the requirements that have been completed in previous operations and the requirements that need to be completed in the next one operation. If the output of prev_action_evaluation is 'Failed', please reflect and output your reflection here. If you think you have entered the wrong page, consider to go back to the previous page in next action.",
+           "important_contents": "Output important contents closely related to user\'s instruction or task on the current page. If there is, please output the contents. If not, please output empty string.",
+           "thought": "Think about the requirements that have been completed in previous operations and the requirements that need to be completed in the next operation.",
            "summary": "Please generate a brief natural language description for the operation in next actions based on your Thought."
          },
          "action": [
@@ -98,10 +98,12 @@ class CustomSystemPrompt(SystemPrompt):
     1. Task: The user\'s instructions you need to complete.
     2. Hints(Optional): Some hints to help you complete the user\'s instructions.
     3. Memory: Important contents are recorded during historical operations for use in subsequent operations.
-    4. Task Progress: Up to the current page, the content you have completed can be understood as the progress of the task.
-    5. Current URL: The webpage you're currently on
-    6. Available Tabs: List of open browser tabs
-    7. Interactive Elements: List in the format:
+    4. Previous Action Evaluation: The evaluation of the last action.
+    5. Task Progress: Up to the current page, the content you have completed can be understood as the progress of the task.
+    6. Future Plans: The next steps you need to take to complete the task.
+    7. Current URL: The webpage you're currently on
+    8. Available Tabs: List of open browser tabs
+    9. Interactive Elements: List in the format:
        index[:]<element_type>element_text</element_type>
        - index: Numeric identifier for interaction
        - element_type: HTML element type (button, input, etc.)
@@ -167,12 +169,16 @@ class CustomAgentMessagePrompt:
     {self.step_info.add_infos}
     3. Memory: 
     {self.step_info.memory}
-    4. Task Progress: 
+    4. Previous Action Evaluation:
+    {self.step_info.prev_action_evaluation}
+    5. Task Progress: 
     {self.step_info.task_progress}
-    5. Current url: {self.state.url}
-    6. Available tabs:
+    6. Future Plans:
+    {self.step_info.plans}
+    7. Current url: {self.state.url}
+    8. Available tabs:
     {self.state.tabs}
-    7. Interactive elements:
+    9. Interactive elements:
     {self.state.element_tree.clickable_elements_to_string(include_attributes=self.include_attributes)}
             """
 
@@ -204,68 +210,95 @@ class CustomAgentMessagePrompt:
         return HumanMessage(content=state_description)
 
 
-def get_monitor_system_prompt() -> SystemMessage:
+def get_monitor_system_prompt():
     system_prompt = """
-    You are an AI assistant tasked with monitoring the execution of a user's task. Your role is to provide structured updates on the evaluation of past actions, the task's progress, future plans, and overall task status. Base your analysis on the current user input data and historical information.
+    You are a helpful AI assistant tasked with monitoring an agent's execution of a user's instruction. Your role is to provide structured updates on the evaluation of past actions, the task's progress, future plans, and overall task status. Base your analysis on the current user's input and historical information.
 
-    USER INPUT STRUCTURE:
-    1. Current Step: The current step number and the total number of steps in the task (e.g., "Step 3 of 10").
-    2. Task: The user's instructions that need to be completed.
-    3. Interactive Elements: A list of interactive elements in the following format:
+    **Input Structure:**
+    1. Task: The user's instructions that need to be completed.
+    2. Previous Actions: The last actions and their results taken by the execution agent.
+    3. Curent Interactive Elements: A list of interactive elements in the following format:
        index[:]<element_type>element_text</element_type>
         - index: A numeric identifier for the interactive element.
         - element_type: The HTML element type (e.g., button, input, link).
         - element_text: The visible text or description of the element.
 
-    Example:
-    33[:]<button>Submit Form</button>
-    _[:] Non-interactive text
+        Example:
+        33[:]<button>Submit Form</button>
+        _[:] Non-interactive text
 
 
-    Notes:
-    - Only elements with numeric indexes are interactive
-    - _[:] elements provide context but cannot be interacted with
+        Notes:
+        - Only elements with numeric indexes are interactive
+        - _[:] elements provide context but cannot be interacted with
 
+    **Final Output Requirements:**
+    Your final output MUST be a JSON object with the following keys:
 
-    Your output MUST be a JSON object with the following keys:
-
-    a. 'prev_action_evaluation': An assessment of the last action taken by the agent. Choose from "Success", "Failed", or "Unknown". If the action failed, provide a reason and suggestions for improvement.
+    a. 'prev_action_evaluation': An assessment of the last action taken by the agent. Choose from "Success", "Failed", or "Unknown". If the action failed, provide a reason and suggestions for improvement or modification.
     b. 'task_progress': A list of sub-tasks that have been successfully completed so far. Describe each completed sub-task. Output an empty list if no tasks are completed.
     c. 'plans': A list of future steps required to complete the user's task. Describe these steps in natural language.
-    d. 'is_done': A boolean value (True or False) indicating whether the user's task has been fully completed. Set to True ONLY when all task requirements have been met.
+    d. 'is_done': True or False, indicating whether the user's task has been fully completed. Set to True ONLY when all task requirements have been met.
 
-    Example Response:
+    **Example Final Output:**
+    ```json
     {
         "prev_action_evaluation": "Unknown - No previous actions to evaluate.",
         "task_progress": ["Opened the home page", "Navigated to product listing page", ...],
         "plans": ["Click the 'Next' button to navigate to the next page", "Enter the search query in the search bar", ...],
-        "is_done": false
+        "is_done": False
     }
+    ```
 
-    Your reasoning MUST be based on the current browser state and historical information. Evaluate 'prev_action_evaluation', 'task_progress', 'plans', and 'is_done' in sequence.
+    **Reasoning and Thinking Guidance:**
+
+    *   Begin by carefully analyzing the user's `Task` and overall intent.
+    *   Then sequentially analyze, and output the JSON keys: `prev_action_evaluation`, `task_progress`, `plans`, and `is_done`.
+    
     """
-    return SystemMessage(content=system_prompt)
+    return system_prompt
 
 
-def get_monitor_user_message(state: BrowserState, step_info: Optional[CustomAgentStepInfo] = None,
-                             include_attributes: list[str] = []) -> HumanMessage:
-    state_description = f"1. Current Step: {step_info.step_number + 1}/{step_info.max_steps}\n"
-    state_description += f"2. Task: {step_info.task} \n"
+def get_monitor_user_message(state: BrowserState,
+                             step_info: Optional[CustomAgentStepInfo] = None,
+                             last_action: Optional[list[ActionModel]] = [],
+                             last_action_result: Optional[List[ActionResult]] = [
+                             ],
+                             include_attributes: list[str] = []):
 
-    interactive_elements_str = state.element_tree.clickable_elements_to_string(include_attributes=include_attributes)
-    state_description += f"3. Interactive elements: \n{interactive_elements_str}\n"
+    state_description = f"1. Task: {step_info.task} \n"
+    if last_action and last_action_result:
+        state_description += f"2. Previous Actions in Step {step_info.step_number-1}: \n"
+        action_len = min(len(last_action), len(last_action_result))
+        last_action = last_action[:action_len]
+        last_action_result = last_action_result[:action_len]
+        for i, action in enumerate(last_action):
+            state_description += f"Action {i + 1}: {action.model_dump(mode='json', exclude_unset=True)} \n"
+            if last_action_result:
+                if last_action_result[i].error:
+                    state_description += f"Action {i + 1} Error: {last_action_result[i].error} \n"
+                if last_action_result[i].extracted_content:
+                    state_description += f"Action {i + 1} Result: {last_action_result[i].extracted_content} \n"
+                if last_action_result[i].is_done:
+                    state_description += f"Action {i + 1} thinks the task have been completed. Now you need to verify it. \n"
+    else:
+        state_description += "2. Previous Actions: No previous actions. \n"
+
+    interactive_elements_str = state.element_tree.clickable_elements_to_string(
+        include_attributes=include_attributes)
+    state_description += f"3. Interactive elements in Step {step_info.step_number}: \n{interactive_elements_str}\n"
 
     if state.screenshot:
         # Format message for vision model
-        return HumanMessage(
-            content=[
-                {"type": "text", "text": state_description},
-                {
-                    "type": "image_url",
-                    "image_url": {
+        content = [
+            {"type": "text", "text": state_description},
+            {
+                "type": "image_url",
+                "image_url": {
                         "url": f"data:image/png;base64,{state.screenshot}"
-                    },
                 },
-            ]
-        )
-    return HumanMessage(content=state_description)
+            },
+        ]
+        return content
+    else:
+        return state_description

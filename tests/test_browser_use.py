@@ -3,22 +3,19 @@
 # @Author  : wenshao
 # @ProjectName: browser-use-webui
 # @FileName: test_browser_use.py
-import pdb
 
 from dotenv import load_dotenv
-
-load_dotenv()
-import sys
-
-sys.path.append(".")
+import pdb
 import asyncio
 import os
 import sys
-from pprint import pprint
+load_dotenv()
 
+sys.path.append(".")
+
+from pprint import pprint
 from browser_use import Agent
 from browser_use.agent.views import AgentHistoryList
-
 from src.utils import utils
 
 
@@ -220,6 +217,7 @@ async def test_browser_use_custom():
 
 
 async def test_browser_use_custom_v2():
+    from openai import OpenAI
     from browser_use.browser.context import BrowserContextWindowSize
     from browser_use.browser.browser import BrowserConfig
     from playwright.async_api import async_playwright
@@ -240,18 +238,23 @@ async def test_browser_use_custom_v2():
     #     api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
     # )
 
-    # llm = utils.get_llm_model(
-    #     provider="gemini",
-    #     model_name="gemini-2.0-flash-exp",
-    #     temperature=1.0,
-    #     api_key=os.getenv("GOOGLE_API_KEY", "")
-    # )
-
     llm = utils.get_llm_model(
-        provider="deepseek",
-        model_name="deepseek-chat",
-        temperature=0.8
+        provider="gemini",
+        model_name="gemini-2.0-flash-exp",
+        temperature=1.0,
+        api_key=os.getenv("GOOGLE_API_KEY", "")
     )
+
+    llm_monitor = OpenAI(
+        base_url=os.getenv("DEEPSEEK_ENDPOINT", ""),
+        api_key=os.getenv("DEEPSEEK_API_KEY", "")
+    )
+
+    # llm = utils.get_llm_model(
+    #     provider="deepseek",
+    #     model_name="deepseek-chat",
+    #     temperature=0.8
+    # )
 
     # llm = utils.get_llm_model(
     #     provider="ollama", model_name="qwen2.5:7b", temperature=0.8
@@ -260,9 +263,10 @@ async def test_browser_use_custom_v2():
     controller = CustomController()
     use_own_browser = True
     disable_security = True
-    use_vision = False  # Set to False when using DeepSeek
+    use_vision = True  # Set to False when using DeepSeek
+    monitor_use_vision = False 
     tool_call_in_content = True  # Set to True when using Ollama
-    max_actions_per_step = 1
+    max_actions_per_step = 3
     playwright = None
     browser = None
     browser_context = None
@@ -293,18 +297,20 @@ async def test_browser_use_custom_v2():
             )
         )
         agent = CustomAgent(
-            task="go to google.com and type 'OpenAI' click search and give me the first url",
-            add_infos="",  # some hints for llm to complete the task
+            task="Search for relevant news about DeepSeek-R1, compile relative information into a text content, and send it to 1450060993@qq.com via Google Mail.",
+            add_infos="1. Remember to press Enter key after typing email address.",  # some hints for llm to complete the task
             llm=llm,
+            llm_monitor=llm_monitor,
             browser=browser,
             browser_context=browser_context,
             controller=controller,
             system_prompt_class=CustomSystemPrompt,
             use_vision=use_vision,
+            monitor_use_vision=monitor_use_vision,
             tool_call_in_content=tool_call_in_content,
             max_actions_per_step=max_actions_per_step
         )
-        history: AgentHistoryList = await agent.run(max_steps=10)
+        history: AgentHistoryList = await agent.run(max_steps=100)
 
         print("Final Result:")
         pprint(history.final_result(), indent=4)
