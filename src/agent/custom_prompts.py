@@ -262,13 +262,11 @@ def get_monitor_system_prompt():
 def get_monitor_user_message(state: BrowserState,
                              step_info: Optional[CustomAgentStepInfo] = None,
                              last_action: Optional[list[ActionModel]] = [],
-                             last_action_result: Optional[List[ActionResult]] = [
-                             ],
+                             last_action_result: Optional[List[ActionResult]] = [],
                              include_attributes: list[str] = []):
-
     state_description = f"1. Task: {step_info.task} \n"
     if last_action and last_action_result:
-        state_description += f"2. Previous Actions in Step {step_info.step_number-1}: \n"
+        state_description += f"2. Previous Actions in Step {step_info.step_number - 1}: \n"
         action_len = min(len(last_action), len(last_action_result))
         last_action = last_action[:action_len]
         last_action_result = last_action_result[:action_len]
@@ -295,7 +293,7 @@ def get_monitor_user_message(state: BrowserState,
             {
                 "type": "image_url",
                 "image_url": {
-                        "url": f"data:image/png;base64,{state.screenshot}"
+                    "url": f"data:image/png;base64,{state.screenshot}"
                 },
             },
         ]
