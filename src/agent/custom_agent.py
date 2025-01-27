@@ -728,6 +728,7 @@ class CustomAgentV2(CustomAgent):
                 self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
                 input_messages = self.message_manager.get_messages()
                 model_output = await self.get_next_action(input_messages)
+                self.message_manager._remove_last_state_message()
                 self._log_response(model_output, step_info=step_info)
                 self._save_conversation(input_messages, model_output)
                 result: list[ActionResult] = await self.controller.multi_act(
@@ -747,6 +748,7 @@ class CustomAgentV2(CustomAgent):
                 if len(result) > 0 and result[-1].is_done:
                     logger.info(f"📄 Result: {result[-1].extracted_content}")
             else:
+                pdb.set_trace()
                 result = [ActionResult(
                     is_done=True,
                     include_in_memory=True,

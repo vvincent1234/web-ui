@@ -275,7 +275,7 @@ async def test_browser_use_custom_v2():
             )
         )
         agent = CustomAgentV2(
-            task="go to google.com and type 'Nvidia' click search and give me the first url",
+            task="give me stock price of Nvidia",
             add_infos="",  # some hints for llm to complete the task
             llm=llm,
             monitor_llm=llm_monitor,
