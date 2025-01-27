@@ -53,3 +53,48 @@ class CustomAgentOutput(AgentOutput):
             ),  # Properly annotated field with no default
             __module__=CustomAgentOutput.__module__,
         )
+
+@dataclass
+class CustomAgentStepInfoV2:
+    step_number: int
+    max_steps: int
+    task: str
+    add_infos: str
+    prev_action_evaluation: str
+    memory: str
+    task_progress: str
+    future_plans: str
+    is_done: bool
+    
+
+class CustomAgentBrainV2(BaseModel):
+    """Current state of the agent"""
+    thought: str
+    summary: str
+
+
+class CustomAgentOutputV2(AgentOutput):
+    """Output model for agent
+
+    @dev note: this model is extended with custom actions in AgentService. You can also use some fields that are not in this model as provided by the linter, as long as they are registered in the DynamicActions model.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    current_state: CustomAgentBrainV2
+    action: list[ActionModel]
+
+    @staticmethod
+    def type_with_custom_actions(
+            custom_actions: Type[ActionModel],
+    ) -> Type["CustomAgentOutputV2"]:
+        """Extend actions with custom actions"""
+        return create_model(
+            "CustomAgentOutputV2",
+            __base__=CustomAgentOutput,
+            action=(
+                list[custom_actions],
+                Field(...),
+            ),  # Properly annotated field with no default
+            __module__=CustomAgentOutput.__module__,
+        )

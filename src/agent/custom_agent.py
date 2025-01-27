@@ -8,7 +8,7 @@ import os
 import base64
 import io
 import platform
-from browser_use.agent.prompts import SystemPrompt
+from browser_use.agent.prompts import SystemPrompt, AgentMessagePrompt
 from browser_use.agent.service import Agent
 from browser_use.agent.views import (
     ActionResult,
@@ -32,8 +32,8 @@ from langchain_core.messages import (
 )
 from src.utils.agent_state import AgentState
 
-from .custom_massage_manager import CustomMassageManager
-from .custom_views import CustomAgentOutput, CustomAgentStepInfo
+from .custom_massage_manager import CustomMassageManager, CustomMassageManagerV2
+from .custom_views import CustomAgentOutput, CustomAgentStepInfo, CustomAgentStepInfoV2, CustomAgentOutputV2
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ class CustomAgent(Agent):
             max_failures: int = 5,
             retry_delay: int = 10,
             system_prompt_class: Type[SystemPrompt] = SystemPrompt,
+            state_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
             max_input_tokens: int = 128000,
             validate_output: bool = False,
             include_attributes: list[str] = [
@@ -106,20 +107,32 @@ class CustomAgent(Agent):
         else:
             self.use_deepseek_r1 = False
         
+        # init step info
+        self.step_info = CustomAgentStepInfo(
+            task=self.task,
+            add_infos=self.add_infos,
+            step_number=1,
+            max_steps=max_steps,
+            memory="",
+            task_progress="",
+            future_plans=""
+        )
+        self._last_actions = None
         # custom new info
         self.add_infos = add_infos
         # agent_state for Stop
         self.agent_state = agent_state
+        self.state_prompt_class = state_prompt_class
         self.message_manager = CustomMassageManager(
             llm=self.llm,
             task=self.task,
             action_descriptions=self.controller.registry.get_prompt_description(),
             system_prompt_class=self.system_prompt_class,
+            state_prompt_class=self.state_prompt_class,
             max_input_tokens=self.max_input_tokens,
             include_attributes=self.include_attributes,
             max_error_length=self.max_error_length,
-            max_actions_per_step=self.max_actions_per_step,
-            use_deepseek_r1=self.use_deepseek_r1
+            max_actions_per_step=self.max_actions_per_step
         )
 
     def _setup_action_models(self) -> None:
@@ -222,7 +235,7 @@ class CustomAgent(Agent):
 
         try:
             state = await self.browser_context.get_state(use_vision=self.use_vision)
-            self.message_manager.add_state_message(state, self._last_result, step_info)
+            self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
             input_messages = self.message_manager.get_messages()
             try:
                 model_output = await self.get_next_action(input_messages)
@@ -251,7 +264,8 @@ class CustomAgent(Agent):
                                                     Something new appeared after action {model_output.action[len(result) - 1].model_dump_json(exclude_unset=True)}",
                                                 is_done=False))
             self._last_result = result
-
+            self._last_actions = model_output.action
+            
             if len(result) > 0 and result[-1].is_done:
                 logger.info(f"📄 Result: {result[-1].extracted_content}")
 
@@ -287,17 +301,7 @@ class CustomAgent(Agent):
             if self.initial_actions:
                 result = await self.controller.multi_act(self.initial_actions, self.browser_context, check_for_new_elements=False)
                 self._last_result = result
-
-            step_info = CustomAgentStepInfo(
-                task=self.task,
-                add_infos=self.add_infos,
-                step_number=1,
-                max_steps=max_steps,
-                memory="",
-                task_progress="",
-                future_plans=""
-            )
-
+                
             for step in range(max_steps):
                 # 1) Check if stop requested
                 if self.agent_state and self.agent_state.is_stop_requested():
@@ -314,7 +318,7 @@ class CustomAgent(Agent):
                     break
 
                 # 3) Do the step
-                await self.step(step_info)
+                await self.step(self.step_info)
 
                 if self.history.is_done():
                     if (
@@ -524,3 +528,240 @@ class CustomAgent(Agent):
             logger.info(f'Created GIF at {output_path}')
         else:
             logger.warning('No images found in history to create GIF')
+            
+class CustomAgentV2(CustomAgent):
+    def __init__(
+            self,
+            task: str,
+            llm: BaseChatModel,
+            monitor_llm: BaseChatModel,
+            add_infos: str = "",
+            browser: Browser | None = None,
+            browser_context: BrowserContext | None = None,
+            controller: Controller = Controller(),
+            use_vision: bool = True,
+            monitor_use_vision: bool = False,
+            save_conversation_path: Optional[str] = None,
+            max_failures: int = 5,
+            retry_delay: int = 10,
+            system_prompt_class: Type[SystemPrompt] = SystemPrompt,
+            state_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
+            monitor_system_prompt_class: Type[SystemPrompt] = SystemPrompt,
+            monitor_state_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
+            max_input_tokens: int = 128000,
+            validate_output: bool = False,
+            include_attributes: list[str] = [
+                "title",
+                "type",
+                "name",
+                "role",
+                "tabindex",
+                "aria-label",
+                "placeholder",
+                "value",
+                "alt",
+                "aria-expanded",
+            ],
+            max_error_length: int = 400,
+            max_actions_per_step: int = 10,
+            tool_call_in_content: bool = True,
+            agent_state: AgentState = None,
+            initial_actions: Optional[List[Dict[str, Dict[str, Any]]]] = None,
+            # Cloud Callbacks
+            register_new_step_callback: Callable[['BrowserState', 'AgentOutput', int], None] | None = None,
+            register_done_callback: Callable[['AgentHistoryList'], None] | None = None,
+            tool_calling_method: Optional[str] = 'auto',
+    ):
+        super().__init__(
+            task=task,
+            llm=llm,
+            browser=browser,
+            browser_context=browser_context,
+            controller=controller,
+            use_vision=use_vision,
+            save_conversation_path=save_conversation_path,
+            max_failures=max_failures,
+            retry_delay=retry_delay,
+            system_prompt_class=system_prompt_class,
+            state_prompt_class=state_prompt_class,
+            max_input_tokens=max_input_tokens,
+            validate_output=validate_output,
+            include_attributes=include_attributes,
+            max_error_length=max_error_length,
+            max_actions_per_step=max_actions_per_step,
+            tool_call_in_content=tool_call_in_content,
+            initial_actions=initial_actions,
+            register_new_step_callback=register_new_step_callback,
+            register_done_callback=register_done_callback,
+            tool_calling_method=tool_calling_method
+        )
+        # init step info
+        self.step_info = CustomAgentStepInfoV2(
+            task=self.task,
+            add_infos=self.add_infos,
+            step_number=1,
+            max_steps=max_steps,
+            memory="",
+            task_progress="",
+            future_plans="",
+            is_done=False
+        )
+        # monitor agent
+        self.monitor_system_prompt_class = monitor_system_prompt_class
+        self.monitor_state_prompt_class = monitor_state_prompt_class
+        self.monitor_llm = monitor_llm
+        self.monitor_use_vision = monitor_use_vision
+        self.monitor_message_manager = CustomMassageManagerV2(
+            llm=self.llm,
+            task=self.task,
+            action_descriptions=self.controller.registry.get_prompt_description(),
+            system_prompt_class=self.monitor_system_prompt_class,
+            state_prompt_class=self.monitor_state_prompt_class,
+            max_input_tokens=self.max_input_tokens,
+            include_attributes=self.include_attributes,
+            max_error_length=self.max_error_length,
+            max_actions_per_step=self.max_actions_per_step
+        )
+    
+    def _setup_action_models(self) -> None:
+        """Setup dynamic action models from controller's registry"""
+        # Get the dynamic action model from controller's registry
+        self.ActionModel = self.controller.registry.create_action_model()
+        # Create output model with the dynamic actions
+        self.AgentOutput = CustomAgentOutputV2.type_with_custom_actions(
+            self.ActionModel)
+
+    def update_step_info(
+            self, model_output, step_info: CustomAgentStepInfoV2 = None
+    ):
+        """
+        update step info
+        """
+        if step_info is None:
+            return
+        
+        if model_output.get("prev_action_evaluation", ""):
+            step_info.prev_action_evaluation = model_output["prev_action_evaluation"]
+        if model_output.get("important_contents", []):
+            import_contents = ""
+            for i, mem in enumerate(model_output["important_contents"]):
+                import_contents += f"{mem}\n"
+            step_info.memory += import_contents
+        if model_output.get("task_progress", []):
+            task_progress = ""
+            for i, task in enumerate(model_output["task_progress"]):
+                task_progress += f"{i + 1}. {task}\n"
+            step_info.task_progress = task_progress
+        if model_output.get("future_plans", []):
+            plans = ""
+            for i, plan in enumerate(model_output["future_plans"]):
+                plans += f"{i + 1}. {plan}\n"
+            step_info.future_plans = plans
+        if model_output.get("is_done", False):
+            step_info.is_done = True
+    
+    def _log_response(self, response: CustomAgentOutputV2, step_info: CustomAgentStepInfoV2) -> None:
+        """Log the model's response"""
+        if "Success" in step_info.prev_action_evaluation:
+            emoji = "✅"
+        elif "Failed" in step_info.prev_action_evaluation:
+            emoji = "❌"
+        else:
+            emoji = "🤷"
+
+        logger.info(
+            f"{emoji} Eval: {step_info.prev_action_evaluation}")
+        logger.info(
+            f"⏳ Task Progress: \n{step_info.task_progress}")
+        logger.info(
+            f"📌 Plans: \n{step_info.future_plans}")
+        logger.info(
+            f"🧠 Memory \n: {step_info.memory}")
+        logger.info(f"🤔 Thought: {response.current_state.thought}")
+        logger.info(f"🎯 Summary: {response.current_state.summary}")
+        for i, action in enumerate(response.action):
+            logger.info(
+                f"🛠️  Action {i + 1}/{len(response.action)}: {action.model_dump_json(exclude_unset=True)}"
+            )
+            
+    @time_execution_async("--get_monitor_result")
+    async def get_monitor_result(self, input_messages: list[BaseMessage]) -> AgentOutput:
+        """Get next action from LLM based on current state"""
+        ai_message = self.llm.invoke(input_messages)
+        self.message_manager._add_message_with_tokens(ai_message)
+        logger.info(f"🤯 Start Deep Thinking: ")
+        logger.info(ai_message.reasoning_content)
+        logger.info(f"🤯 End Deep Thinking")
+        if isinstance(ai_message.content, list):
+            parsed_json = json.loads(ai_message.content[0].replace("```json", "").replace("```", ""))
+        else:
+            parsed_json = json.loads(ai_message.content.replace("```json", "").replace("```", ""))
+        return parsed_json
+    
+    @time_execution_async("--step")
+    async def step(self, step_info: Optional[CustomAgentStepInfo] = None) -> None:
+        """Execute one step of the task"""
+        logger.info(f"\n📍 Step {self.n_steps}")
+        state = None
+        model_output = None
+        result: list[ActionResult] = []
+
+        try:
+            # Monitor agent here
+            monitor_state = await self.browser_context.get_state(use_vision=self.monitor_use_vision)
+            self.monitor_message_manager.add_state_message(monitor_state, self._last_actions, self._last_result, step_info)
+            monitor_input_messages = self.monitor_message_manager.get_messages()
+            monitor_ouput = self.get_monitor_result(monitor_input_messages)
+            self.update_step_info(monitor_ouput, step_info)
+            
+            state = await self.browser_context.get_state(use_vision=self.use_vision)
+            self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
+            input_messages = self.message_manager.get_messages()
+            model_output = await self.get_next_action(input_messages, step_info)
+            
+            self._save_conversation(input_messages, model_output)
+            result: list[ActionResult] = await self.controller.multi_act(
+                model_output.action, self.browser_context
+            )
+            if len(result):
+                if step_info.is_done:
+                    logger.info("🎉 Task is done")
+                result[-1].is_done = step_info.is_done
+            else:
+                result = ActionResult()
+            
+            if len(result) != len(model_output.action):
+                # I think something changes, such information should let LLM know
+                for ri in range(len(result), len(model_output.action)):
+                    result.append(ActionResult(extracted_content=None,
+                                                include_in_memory=True,
+                                                error=f"{model_output.action[ri].model_dump_json(exclude_unset=True)} is Failed to execute. \
+                                                    Something new appeared after action {model_output.action[len(result) - 1].model_dump_json(exclude_unset=True)}",
+                                                is_done=False))
+                    
+            self._last_result = result
+            if len(result) > 0 and result[-1].is_done:
+                logger.info(f"📄 Result: {result[-1].extracted_content}")
+                
+            self.consecutive_failures = 0
+            
+        except Exception as e:
+            result = await self._handle_step_error(e)
+            self._last_result = result
+
+        finally:
+            actions = [a.model_dump(exclude_unset=True) for a in model_output.action] if model_output else []
+            self.telemetry.capture(
+                AgentStepTelemetryEvent(
+                    agent_id=self.agent_id,
+                    step=self.n_steps,
+                    actions=actions,
+                    consecutive_failures=self.consecutive_failures,
+                    step_error=[r.error for r in result if r.error] if result else ['No result'],
+                )
+            )
+            if not result:
+                return
+
+            if state:
+                self._make_history_item(model_output, state, result)
