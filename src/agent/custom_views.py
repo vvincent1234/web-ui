@@ -64,7 +64,7 @@ class CustomAgentStepInfoV2:
     memory: str
     task_progress: str
     future_plans: str
-    is_done: bool
+    is_done: str
     
 
 class CustomAgentBrainV2(BaseModel):
@@ -91,10 +91,10 @@ class CustomAgentOutputV2(AgentOutput):
         """Extend actions with custom actions"""
         return create_model(
             "CustomAgentOutputV2",
-            __base__=CustomAgentOutput,
+            __base__=CustomAgentOutputV2,
             action=(
                 list[custom_actions],
                 Field(...),
             ),  # Properly annotated field with no default
-            __module__=CustomAgentOutput.__module__,
+            __module__=CustomAgentOutputV2.__module__,
         )

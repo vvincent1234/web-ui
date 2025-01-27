@@ -227,7 +227,7 @@ class CustomAgentMessagePrompt(AgentMessagePrompt):
 
         return HumanMessage(content=state_description)
 
-class MonitorSystemPromptV2(CustomSystemPrompt):
+class MonitorSystemPrompt(CustomSystemPrompt):
     def get_system_message(self) -> SystemMessage:
         """
         Get the system prompt for the agent.
@@ -263,7 +263,7 @@ class MonitorSystemPromptV2(CustomSystemPrompt):
     b. 'important_contents': A list of important contents closely related to or useful to user\'s instruction on the current page.
     c. 'task_progress': A list of sub-tasks that have been successfully completed so far. Describe each completed sub-task. Output an empty list if no tasks are completed.
     d. 'future_plans': A list of future steps required to complete the user's task. Describe these steps in natural language.
-    e. 'is_done': True or False, indicating whether the user's task has been fully completed. Set to True ONLY when all task requirements have been met.
+    e. 'is_done': Yes or No, indicating whether the user's task has been fully completed. Set to Yes only when all task requirements are met. If Yes, return the requested information for the user. If No, provide a brief explanation of why the task is not yet complete.
 
     **Example Final Output:**
     ```json
@@ -272,7 +272,7 @@ class MonitorSystemPromptV2(CustomSystemPrompt):
         "important_contents": [],
         "task_progress": ["Open google home page"],
         "future_plans": ["Type OpenAI in search bar", "Click the 'Search' button to search"],
-        "is_done": False
+        "is_done": "No - The page is still not available."
     }
     ```
 
@@ -281,15 +281,16 @@ class MonitorSystemPromptV2(CustomSystemPrompt):
     *   Begin by carefully analyzing the user's `Task` and overall intent.
     *   Then sequentially analyze, and output the JSON keys: `prev_action_evaluation`, `important_contents`, `task_progress`, `future_plans`, and `is_done`.
     
+    Remember: Your Final output must be valid JSON matching the specified format. Each action in the sequence must be valid.
     """
-    return SystemMessage(content=system_prompt)
+        return SystemMessage(content=system_prompt)
     
 
 class MonitorAgentMessagePrompt(CustomAgentMessagePrompt):
     def get_user_message(self) -> HumanMessage:
         state_description = f'Current step: {self.step_info.step_number}/{self.step_info.max_steps}'
         state_description += f"1. Task: {self.step_info.task} \n"
-        if self.last_actions:
+        if self.actions and self.result:
             state_description += f"2. Previous Actions in Previou Step {self.step_info.step_number-1}: \n"
             for i, result in enumerate(self.result):
                 action = self.actions[i]
@@ -306,6 +307,10 @@ class MonitorAgentMessagePrompt(CustomAgentMessagePrompt):
         else:
             state_description += "2. Previous Actions: No previous actions. \n"
 
+        elements_text = self.state.element_tree.clickable_elements_to_string(include_attributes=self.include_attributes)
+        has_content_above = (self.state.pixels_above or 0) > 0
+        has_content_below = (self.state.pixels_below or 0) > 0
+        
         if elements_text != '':
             if has_content_above:
                 elements_text = (
@@ -340,7 +345,7 @@ class MonitorAgentMessagePrompt(CustomAgentMessagePrompt):
             return HumanMessage(content=state_description)
 
     
-class CustomSystemPromptV2(CustomAgentMessagePrompt):
+class CustomSystemPromptV2(CustomSystemPrompt):
     def important_rules(self) -> str:
         """
         Returns the important rules for the agent.
@@ -507,7 +512,7 @@ class CustomAgentMessagePromptV2(CustomAgentMessagePrompt):
     {elements_text}
             """
 
-        if self.result:
+        if self.actions and self.result:
             state_description += "\n **Previous Actions** \n"
             state_description += f'Previous step: {self.step_info.step_number-1}/{self.step_info.max_steps}'
             for i, result in enumerate(self.result):

@@ -12,10 +12,12 @@ from browser_use.agent.prompts import SystemPrompt, AgentMessagePrompt
 from browser_use.agent.service import Agent
 from browser_use.agent.views import (
     ActionResult,
+    ActionModel,
     AgentHistoryList,
     AgentOutput,
     AgentHistory,
 )
+from json_repair import repair_json
 from browser_use.browser.browser import Browser
 from browser_use.browser.context import BrowserContext
 from browser_use.browser.views import BrowserStateHistory
@@ -32,7 +34,7 @@ from langchain_core.messages import (
 )
 from src.utils.agent_state import AgentState
 
-from .custom_massage_manager import CustomMassageManager, CustomMassageManagerV2
+from .custom_massage_manager import CustomMassageManager
 from .custom_views import CustomAgentOutput, CustomAgentStepInfo, CustomAgentStepInfoV2, CustomAgentOutputV2
 
 logger = logging.getLogger(__name__)
@@ -110,9 +112,9 @@ class CustomAgent(Agent):
         # init step info
         self.step_info = CustomAgentStepInfo(
             task=self.task,
-            add_infos=self.add_infos,
+            add_infos=add_infos,
             step_number=1,
-            max_steps=max_steps,
+            max_steps=200,
             memory="",
             task_progress="",
             future_plans=""
@@ -199,9 +201,11 @@ class CustomAgent(Agent):
             logger.info(ai_message.reasoning_content)
             logger.info(f"🤯 End Deep Thinking")
             if isinstance(ai_message.content, list):
-                parsed_json = json.loads(ai_message.content[0].replace("```json", "").replace("```", ""))
+                ai_content = ai_message.content[0].replace("```json", "").replace("```", "")
             else:
-                parsed_json = json.loads(ai_message.content.replace("```json", "").replace("```", ""))
+                ai_content = ai_message.content.replace("```json", "").replace("```", "")
+            ai_content = repair_json(ai_content)
+            parsed_json = json.loads(ai_content)
             parsed: AgentOutput = self.AgentOutput(**parsed_json)
             if parsed is None:
                 logger.debug(ai_message.content)
@@ -210,9 +214,11 @@ class CustomAgent(Agent):
             ai_message = self.llm.invoke(input_messages)
             self.message_manager._add_message_with_tokens(ai_message)
             if isinstance(ai_message.content, list):
-                parsed_json = json.loads(ai_message.content[0].replace("```json", "").replace("```", ""))
+                ai_content = ai_message.content[0].replace("```json", "").replace("```", "")
             else:
-                parsed_json = json.loads(ai_message.content.replace("```json", "").replace("```", ""))
+                ai_content = ai_message.content.replace("```json", "").replace("```", "")
+            ai_content = repair_json(ai_content)
+            parsed_json = json.loads(ai_content)
             parsed: AgentOutput = self.AgentOutput(**parsed_json)
             if parsed is None:
                 logger.debug(ai_message.content)
@@ -220,7 +226,6 @@ class CustomAgent(Agent):
 
         # cut the number of actions to max_actions_per_step
         parsed.action = parsed.action[: self.max_actions_per_step]
-        self._log_response(parsed)
         self.n_steps += 1
 
         return parsed
@@ -239,6 +244,7 @@ class CustomAgent(Agent):
             input_messages = self.message_manager.get_messages()
             try:
                 model_output = await self.get_next_action(input_messages)
+                self._log_response(model_output)
                 if self.register_new_step_callback:
                     self.register_new_step_callback(state, model_output, self.n_steps)
                 self.update_step_info(model_output, step_info)
@@ -296,7 +302,7 @@ class CustomAgent(Agent):
         """Execute the task with maximum number of steps"""
         try:
             self._log_agent_run()
-
+            self.step_info.max_steps = max_steps
             # Execute initial actions if provided
             if self.initial_actions:
                 result = await self.controller.multi_act(self.initial_actions, self.browser_context, check_for_new_elements=False)
@@ -575,6 +581,7 @@ class CustomAgentV2(CustomAgent):
         super().__init__(
             task=task,
             llm=llm,
+            add_infos=add_infos,
             browser=browser,
             browser_context=browser_context,
             controller=controller,
@@ -600,18 +607,19 @@ class CustomAgentV2(CustomAgent):
             task=self.task,
             add_infos=self.add_infos,
             step_number=1,
-            max_steps=max_steps,
+            max_steps=200,
+            prev_action_evaluation="",
             memory="",
             task_progress="",
             future_plans="",
-            is_done=False
+            is_done="No"
         )
         # monitor agent
         self.monitor_system_prompt_class = monitor_system_prompt_class
         self.monitor_state_prompt_class = monitor_state_prompt_class
         self.monitor_llm = monitor_llm
         self.monitor_use_vision = monitor_use_vision
-        self.monitor_message_manager = CustomMassageManagerV2(
+        self.monitor_message_manager = CustomMassageManager(
             llm=self.llm,
             task=self.task,
             action_descriptions=self.controller.registry.get_prompt_description(),
@@ -657,8 +665,7 @@ class CustomAgentV2(CustomAgent):
             for i, plan in enumerate(model_output["future_plans"]):
                 plans += f"{i + 1}. {plan}\n"
             step_info.future_plans = plans
-        if model_output.get("is_done", False):
-            step_info.is_done = True
+        step_info.is_done = model_output.get("is_done", "No")
     
     def _log_response(self, response: CustomAgentOutputV2, step_info: CustomAgentStepInfoV2) -> None:
         """Log the model's response"""
@@ -687,15 +694,17 @@ class CustomAgentV2(CustomAgent):
     @time_execution_async("--get_monitor_result")
     async def get_monitor_result(self, input_messages: list[BaseMessage]) -> AgentOutput:
         """Get next action from LLM based on current state"""
-        ai_message = self.llm.invoke(input_messages)
+        ai_message = self.monitor_llm.invoke(input_messages)
         self.message_manager._add_message_with_tokens(ai_message)
         logger.info(f"🤯 Start Deep Thinking: ")
         logger.info(ai_message.reasoning_content)
         logger.info(f"🤯 End Deep Thinking")
         if isinstance(ai_message.content, list):
-            parsed_json = json.loads(ai_message.content[0].replace("```json", "").replace("```", ""))
+            ai_content = ai_message.content[0].replace("```json", "").replace("```", "")
         else:
-            parsed_json = json.loads(ai_message.content.replace("```json", "").replace("```", ""))
+            ai_content = ai_message.content.replace("```json", "").replace("```", "")
+        ai_content = repair_json(ai_content)
+        parsed_json = json.loads(ai_content)
         return parsed_json
     
     @time_execution_async("--step")
@@ -711,37 +720,38 @@ class CustomAgentV2(CustomAgent):
             monitor_state = await self.browser_context.get_state(use_vision=self.monitor_use_vision)
             self.monitor_message_manager.add_state_message(monitor_state, self._last_actions, self._last_result, step_info)
             monitor_input_messages = self.monitor_message_manager.get_messages()
-            monitor_ouput = self.get_monitor_result(monitor_input_messages)
+            monitor_ouput = await self.get_monitor_result(monitor_input_messages)
             self.update_step_info(monitor_ouput, step_info)
             
-            state = await self.browser_context.get_state(use_vision=self.use_vision)
-            self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
-            input_messages = self.message_manager.get_messages()
-            model_output = await self.get_next_action(input_messages, step_info)
+            if step_info.is_done.startswith("No"):
+                state = await self.browser_context.get_state(use_vision=self.use_vision)
+                self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
+                input_messages = self.message_manager.get_messages()
+                model_output = await self.get_next_action(input_messages)
+                self._log_response(model_output, step_info=step_info)
+                self._save_conversation(input_messages, model_output)
+                result: list[ActionResult] = await self.controller.multi_act(
+                    model_output.action, self.browser_context
+                )
             
-            self._save_conversation(input_messages, model_output)
-            result: list[ActionResult] = await self.controller.multi_act(
-                model_output.action, self.browser_context
-            )
-            if len(result):
-                if step_info.is_done:
-                    logger.info("🎉 Task is done")
-                result[-1].is_done = step_info.is_done
+                if len(result) != len(model_output.action):
+                    # I think something changes, such information should let LLM know
+                    for ri in range(len(result), len(model_output.action)):
+                        result.append(ActionResult(extracted_content=None,
+                                                    include_in_memory=True,
+                                                    error=f"{model_output.action[ri].model_dump_json(exclude_unset=True)} is Failed to execute. \
+                                                        Something new appeared after action {model_output.action[len(result) - 1].model_dump_json(exclude_unset=True)}",
+                                                    is_done=False))
+                self._last_result = result
+                self._last_actions = model_output.action
+                if len(result) > 0 and result[-1].is_done:
+                    logger.info(f"📄 Result: {result[-1].extracted_content}")
             else:
-                result = ActionResult()
-            
-            if len(result) != len(model_output.action):
-                # I think something changes, such information should let LLM know
-                for ri in range(len(result), len(model_output.action)):
-                    result.append(ActionResult(extracted_content=None,
-                                                include_in_memory=True,
-                                                error=f"{model_output.action[ri].model_dump_json(exclude_unset=True)} is Failed to execute. \
-                                                    Something new appeared after action {model_output.action[len(result) - 1].model_dump_json(exclude_unset=True)}",
-                                                is_done=False))
-                    
-            self._last_result = result
-            if len(result) > 0 and result[-1].is_done:
-                logger.info(f"📄 Result: {result[-1].extracted_content}")
+                result = [ActionResult(
+                    is_done=True,
+                    include_in_memory=True,
+                    extracted_content='-'.join(step_info.is_done.split('-')[1:])
+                )]
                 
             self.consecutive_failures = 0
             
