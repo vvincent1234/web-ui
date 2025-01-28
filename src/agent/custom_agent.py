@@ -101,7 +101,7 @@ class CustomAgent(Agent):
             register_done_callback=register_done_callback,
             tool_calling_method=tool_calling_method
         )
-        if self.model_name in ["deepseek-reasoner"] or self.model_name.startswith("deepseek-r1"):
+        if self.model_name in ["deepseek-reasoner"] or "deepseek-r1" in self.model_name:
             # deepseek-reasoner does not support function calling
             self.use_deepseek_r1 = True
             # deepseek-reasoner only support 64000 context
@@ -683,7 +683,7 @@ class CustomAgentV2(CustomAgent):
         logger.info(
             f"📌 Plans: \n{step_info.future_plans}")
         logger.info(
-            f"🧠 Memory \n: {step_info.memory}")
+            f"🧠 Memory: \n{step_info.memory}")
         logger.info(f"🤔 Thought: {response.current_state.thought}")
         logger.info(f"🎯 Summary: {response.current_state.summary}")
         for i, action in enumerate(response.action):
@@ -695,7 +695,7 @@ class CustomAgentV2(CustomAgent):
     async def get_monitor_result(self, input_messages: list[BaseMessage]) -> AgentOutput:
         """Get next action from LLM based on current state"""
         ai_message = self.monitor_llm.invoke(input_messages)
-        self.message_manager._add_message_with_tokens(ai_message)
+        self.monitor_message_manager._add_message_with_tokens(ai_message)
         logger.info(f"🤯 Start Deep Thinking: ")
         logger.info(ai_message.reasoning_content)
         logger.info(f"🤯 End Deep Thinking")
@@ -721,6 +721,7 @@ class CustomAgentV2(CustomAgent):
             self.monitor_message_manager.add_state_message(monitor_state, self._last_actions, self._last_result, step_info)
             monitor_input_messages = self.monitor_message_manager.get_messages()
             monitor_ouput = await self.get_monitor_result(monitor_input_messages)
+            self.monitor_message_manager._remove_state_message_by_index(-3)
             self.update_step_info(monitor_ouput, step_info)
             
             if step_info.is_done.startswith("No"):
@@ -728,7 +729,7 @@ class CustomAgentV2(CustomAgent):
                 self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
                 input_messages = self.message_manager.get_messages()
                 model_output = await self.get_next_action(input_messages)
-                self.message_manager._remove_last_state_message()
+                self.message_manager._remove_state_message_by_index(-1)
                 self._log_response(model_output, step_info=step_info)
                 self._save_conversation(input_messages, model_output)
                 result: list[ActionResult] = await self.controller.multi_act(
@@ -748,7 +749,6 @@ class CustomAgentV2(CustomAgent):
                 if len(result) > 0 and result[-1].is_done:
                     logger.info(f"📄 Result: {result[-1].extracted_content}")
             else:
-                pdb.set_trace()
                 result = [ActionResult(
                     is_done=True,
                     include_in_memory=True,

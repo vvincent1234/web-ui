@@ -137,9 +137,9 @@ async def test_browser_use_custom():
     #     provider="ollama", model_name="qwen2.5:7b", temperature=0.5
     # )
     
-    # llm = utils.get_llm_model(
-    #     provider="ollama", model_name="deepseek-r1:14b", temperature=0.5
-    # )
+    llm = utils.get_llm_model(
+        provider="ollama", model_name="deepseek-r1:14b", temperature=0.5
+    )
 
     controller = CustomController()
     use_own_browser = False
@@ -240,11 +240,11 @@ async def test_browser_use_custom_v2():
     )
 
     controller = CustomController()
-    use_own_browser = False
+    use_own_browser = True
     disable_security = True
     use_vision = False  # Set to False when using DeepSeek
     monitor_use_vision = False
-    max_actions_per_step = 10
+    max_actions_per_step = 1
     playwright = None
     browser = None
     browser_context = None
@@ -275,7 +275,7 @@ async def test_browser_use_custom_v2():
             )
         )
         agent = CustomAgentV2(
-            task="give me stock price of Nvidia",
+            task="get stock price of Nvidia and send this info to 145060993@qq.com via gmail.",
             add_infos="",  # some hints for llm to complete the task
             llm=llm,
             monitor_llm=llm_monitor,
@@ -290,7 +290,7 @@ async def test_browser_use_custom_v2():
             monitor_use_vision=monitor_use_vision,
             max_actions_per_step=max_actions_per_step
         )
-        history: AgentHistoryList = await agent.run(max_steps=10)
+        history: AgentHistoryList = await agent.run(max_steps=100)
 
         print("Final Result:")
         pprint(history.final_result(), indent=4)
