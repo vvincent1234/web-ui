@@ -32,10 +32,14 @@ async def test_browser_use_org():
     #     api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
     # )
 
+    # llm = utils.get_llm_model(
+    #     provider="deepseek",
+    #     model_name="deepseek-chat",
+    #     temperature=0.8
+    # )
+    
     llm = utils.get_llm_model(
-        provider="deepseek",
-        model_name="deepseek-chat",
-        temperature=0.8
+        provider="ollama", model_name="deepseek-r1:14b", temperature=0.5
     )
 
     window_w, window_h = 1920, 1080
@@ -105,14 +109,22 @@ async def test_browser_use_custom():
     from src.controller.custom_controller import CustomController
 
     window_w, window_h = 1920, 1080
-
+    
     # llm = utils.get_llm_model(
-    #     provider="azure_openai",
+    #     provider="openai",
     #     model_name="gpt-4o",
     #     temperature=0.8,
-    #     base_url=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
-    #     api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
+    #     base_url=os.getenv("OPENAI_ENDPOINT", ""),
+    #     api_key=os.getenv("OPENAI_API_KEY", ""),
     # )
+
+    llm = utils.get_llm_model(
+        provider="azure_openai",
+        model_name="gpt-4o",
+        temperature=0.8,
+        base_url=os.getenv("AZURE_OPENAI_ENDPOINT", ""),
+        api_key=os.getenv("AZURE_OPENAI_API_KEY", ""),
+    )
 
     # llm = utils.get_llm_model(
     #     provider="gemini",
@@ -142,20 +154,24 @@ async def test_browser_use_custom():
     )
 
     controller = CustomController()
-    use_own_browser = False
+    use_own_browser = True
     disable_security = True
     use_vision = False  # Set to False when using DeepSeek
     
-    max_actions_per_step = 10
+    max_actions_per_step = 1
     playwright = None
     browser = None
     browser_context = None
 
     try:
+        extra_chromium_args = [f"--window-size={window_w},{window_h}"]
         if use_own_browser:
             chrome_path = os.getenv("CHROME_PATH", None)
             if chrome_path == "":
                 chrome_path = None
+            chrome_user_data = os.getenv("CHROME_USER_DATA", None)
+            if chrome_user_data:
+                extra_chromium_args += [f"--user-data-dir={chrome_user_data}"]
         else:
             chrome_path = None
         browser = CustomBrowser(
@@ -163,7 +179,7 @@ async def test_browser_use_custom():
                 headless=False,
                 disable_security=disable_security,
                 chrome_instance_path=chrome_path,
-                extra_chromium_args=[f"--window-size={window_w},{window_h}"],
+                extra_chromium_args=extra_chromium_args,
             )
         )
         browser_context = await browser.new_context(
@@ -177,18 +193,18 @@ async def test_browser_use_custom():
             )
         )
         agent = CustomAgent(
-            task="go to google.com and type 'Nvidia' click search and give me the first url",
+            task="Search 'Nvidia' and give me the first url",
             add_infos="",  # some hints for llm to complete the task
             llm=llm,
             browser=browser,
             browser_context=browser_context,
             controller=controller,
             system_prompt_class=CustomSystemPrompt,
-            state_prompt_class=CustomAgentMessagePrompt,
+            agent_prompt_class=CustomAgentMessagePrompt,
             use_vision=use_vision,
             max_actions_per_step=max_actions_per_step
         )
-        history: AgentHistoryList = await agent.run(max_steps=10)
+        history: AgentHistoryList = await agent.run(max_steps=100)
 
         print("Final Result:")
         pprint(history.final_result(), indent=4)
@@ -217,7 +233,7 @@ async def test_browser_use_custom():
             await playwright.stop()
         if browser:
             await browser.close()
-
+            
 async def test_browser_use_custom_v2():
     from browser_use.browser.context import BrowserContextWindowSize
     from browser_use.browser.browser import BrowserConfig
@@ -275,7 +291,7 @@ async def test_browser_use_custom_v2():
             )
         )
         agent = CustomAgentV2(
-            task="get stock price of Nvidia and send this info to 145060993@qq.com via gmail.",
+            task="give stock price of Nvidia, send it to 1450060993@qq.com via Gmail.",
             add_infos="",  # some hints for llm to complete the task
             llm=llm,
             monitor_llm=llm_monitor,
@@ -283,9 +299,9 @@ async def test_browser_use_custom_v2():
             browser_context=browser_context,
             controller=controller,
             system_prompt_class=CustomSystemPromptV2,
-            state_prompt_class=CustomAgentMessagePromptV2,
+            agent_prompt_class=CustomAgentMessagePromptV2,
             monitor_system_prompt_class=MonitorSystemPrompt,
-            monitor_state_prompt_class=MonitorAgentMessagePrompt,
+            monitor_agent_prompt_class=MonitorAgentMessagePrompt,
             use_vision=use_vision,
             monitor_use_vision=monitor_use_vision,
             max_actions_per_step=max_actions_per_step

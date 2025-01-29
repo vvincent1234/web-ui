@@ -156,7 +156,7 @@ class CustomAgentMessagePrompt(AgentMessagePrompt):
 
     def get_user_message(self) -> HumanMessage:
         if self.step_info:
-            step_info_description = f'Current step: {self.step_info.step_number}/{self.step_info.max_steps}'
+            step_info_description = f'Current step: {self.step_info.step_number}/{self.step_info.max_steps}\n'
         else:
             step_info_description = ''
 
@@ -183,7 +183,7 @@ class CustomAgentMessagePrompt(AgentMessagePrompt):
    
         state_description = f"""
 {step_info_description}
-1. Task: {self.step_info.task}
+1. Task: {self.step_info.task}. 
 2. Hints(Optional): 
 {self.step_info.add_infos}
 3. Memory: 
@@ -195,9 +195,9 @@ class CustomAgentMessagePrompt(AgentMessagePrompt):
 {elements_text}
         """
 
-        if self.result:
+        if self.actions and self.result:
             state_description += "\n **Previous Actions** \n"
-            state_description += f'Previous step: {self.step_info.step_number-1}/{self.step_info.max_steps}'
+            state_description += f'Previous step: {self.step_info.step_number-1}/{self.step_info.max_steps} \n'
             for i, result in enumerate(self.result):
                 action = self.actions[i]
                 state_description += f"Previous action {i + 1}/{len(self.result)}: {action.model_dump_json(exclude_unset=True)}\n"
@@ -226,7 +226,7 @@ class CustomAgentMessagePrompt(AgentMessagePrompt):
             )
 
         return HumanMessage(content=state_description)
-
+    
 class MonitorSystemPrompt(CustomSystemPrompt):
     def get_system_message(self) -> SystemMessage:
         """

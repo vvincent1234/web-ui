@@ -31,7 +31,7 @@ class CustomMassageManager(MessageManager):
             task: str,
             action_descriptions: str,
             system_prompt_class: Type[SystemPrompt],
-            state_prompt_class: Type[AgentMessagePrompt],
+            agent_prompt_class: Type[AgentMessagePrompt],
             max_input_tokens: int = 128000,
             estimated_characters_per_token: int = 3,
             image_tokens: int = 800,
@@ -53,7 +53,7 @@ class CustomMassageManager(MessageManager):
             max_actions_per_step=max_actions_per_step,
             message_context=message_context
         )
-        self.state_prompt_class = state_prompt_class
+        self.agent_prompt_class = agent_prompt_class
         # Custom: Move Task info to state_message
         self.history = MessageHistory()
         self._add_message_with_tokens(self.system_prompt)
@@ -92,7 +92,7 @@ class CustomMassageManager(MessageManager):
     ) -> None:
         """Add browser state as human message"""
         # otherwise add state message and result to next message (which will not stay in memory)
-        state_message = self.state_prompt_class(
+        state_message = self.agent_prompt_class(
             state,
             actions,
             result,
@@ -115,3 +115,15 @@ class CustomMassageManager(MessageManager):
 				len(text) // self.estimated_characters_per_token
 			)  # Rough estimate if no tokenizer available
         return tokens
+
+    def _remove_state_message_by_index(self, remove_ind=-1) -> None:
+        """Remove last state message from history"""
+        i = len(self.history.messages) - 1
+        remove_cnt = 0
+        while i >= 0:
+            if isinstance(self.history.messages[i].message, HumanMessage): 
+                remove_cnt += 1
+            if remove_cnt == abs(remove_ind):
+                self.history.remove_message(i)
+                break
+            i -= 1

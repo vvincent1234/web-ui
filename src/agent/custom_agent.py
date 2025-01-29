@@ -32,6 +32,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     BaseMessage,
 )
+from json_repair import repair_json
 from src.utils.agent_state import AgentState
 
 from .custom_massage_manager import CustomMassageManager
@@ -54,7 +55,7 @@ class CustomAgent(Agent):
             max_failures: int = 5,
             retry_delay: int = 10,
             system_prompt_class: Type[SystemPrompt] = SystemPrompt,
-            state_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
+            agent_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
             max_input_tokens: int = 128000,
             validate_output: bool = False,
             include_attributes: list[str] = [
@@ -109,28 +110,18 @@ class CustomAgent(Agent):
         else:
             self.use_deepseek_r1 = False
         
-        # init step info
-        self.step_info = CustomAgentStepInfo(
-            task=self.task,
-            add_infos=add_infos,
-            step_number=1,
-            max_steps=200,
-            memory="",
-            task_progress="",
-            future_plans=""
-        )
+        # record last actions
         self._last_actions = None
         # custom new info
         self.add_infos = add_infos
         # agent_state for Stop
         self.agent_state = agent_state
-        self.state_prompt_class = state_prompt_class
         self.message_manager = CustomMassageManager(
             llm=self.llm,
             task=self.task,
             action_descriptions=self.controller.registry.get_prompt_description(),
             system_prompt_class=self.system_prompt_class,
-            state_prompt_class=self.state_prompt_class,
+            agent_prompt_class=agent_prompt_class,
             max_input_tokens=self.max_input_tokens,
             include_attributes=self.include_attributes,
             max_error_length=self.max_error_length,
@@ -193,41 +184,38 @@ class CustomAgent(Agent):
     @time_execution_async("--get_next_action")
     async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
         """Get next action from LLM based on current state"""
-        if self.use_deepseek_r1:
-            merged_input_messages = self.message_manager.merge_successive_human_messages(input_messages)
-            ai_message = self.llm.invoke(merged_input_messages)
-            self.message_manager._add_message_with_tokens(ai_message)
-            logger.info(f"🤯 Start Deep Thinking: ")
-            logger.info(ai_message.reasoning_content)
-            logger.info(f"🤯 End Deep Thinking")
-            if isinstance(ai_message.content, list):
-                ai_content = ai_message.content[0].replace("```json", "").replace("```", "")
-            else:
-                ai_content = ai_message.content.replace("```json", "").replace("```", "")
-            ai_content = repair_json(ai_content)
-            parsed_json = json.loads(ai_content)
-            parsed: AgentOutput = self.AgentOutput(**parsed_json)
-            if parsed is None:
-                logger.debug(ai_message.content)
-                raise ValueError(f'Could not parse response.')
-        else:
-            ai_message = self.llm.invoke(input_messages)
-            self.message_manager._add_message_with_tokens(ai_message)
-            if isinstance(ai_message.content, list):
-                ai_content = ai_message.content[0].replace("```json", "").replace("```", "")
-            else:
-                ai_content = ai_message.content.replace("```json", "").replace("```", "")
-            ai_content = repair_json(ai_content)
-            parsed_json = json.loads(ai_content)
-            parsed: AgentOutput = self.AgentOutput(**parsed_json)
-            if parsed is None:
-                logger.debug(ai_message.content)
-                raise ValueError(f'Could not parse response.')
+        messages_to_process = (
+            self.message_manager.merge_successive_human_messages(input_messages)
+            if self.use_deepseek_r1
+            else input_messages
+        )
 
-        # cut the number of actions to max_actions_per_step
+        ai_message = self.llm.invoke(messages_to_process)
+        self.message_manager._add_message_with_tokens(ai_message)
+
+        if self.use_deepseek_r1:
+            logger.info("🤯 Start Deep Thinking: ")
+            logger.info(ai_message.reasoning_content)
+            logger.info("🤯 End Deep Thinking")
+
+        if isinstance(ai_message.content, list):
+            ai_content = ai_message.content[0]
+        else:
+            ai_content = ai_message.content
+
+        ai_content = ai_content.replace("```json", "").replace("```", "")
+        ai_content = repair_json(ai_content)
+        parsed_json = json.loads(ai_content)
+        parsed: AgentOutput = self.AgentOutput(**parsed_json)
+        
+        if parsed is None:
+            logger.debug(ai_message.content)
+            raise ValueError('Could not parse response.')
+
+        # Limit actions to maximum allowed per step
         parsed.action = parsed.action[: self.max_actions_per_step]
         self.n_steps += 1
-
+        
         return parsed
 
     @time_execution_async("--step")
@@ -250,28 +238,31 @@ class CustomAgent(Agent):
                 self.update_step_info(model_output, step_info)
                 logger.info(f"🧠 All Memory: \n{step_info.memory}")
                 self._save_conversation(input_messages, model_output)
-                # should we remove last state message? at least, deepseek-reasoner cannot remove
                 if self.model_name != "deepseek-reasoner":
-                    self.message_manager._remove_last_state_message()
+                    # remove prev message
+                    self.message_manager._remove_state_message_by_index(-1)
             except Exception as e:
                 # model call failed, remove last state message from history
-                self.message_manager._remove_last_state_message()
+                self.message_manager._remove_state_message_by_index(-1)
                 raise e
 
+            actions: list[ActionModel] = model_output.action
             result: list[ActionResult] = await self.controller.multi_act(
-                model_output.action, self.browser_context
+                actions, self.browser_context
             )
-            if len(result) != len(model_output.action):
+            if len(result) != len(actions):
                 # I think something changes, such information should let LLM know
-                for ri in range(len(result), len(model_output.action)):
+                for ri in range(len(result), len(actions)):
                     result.append(ActionResult(extracted_content=None,
                                                 include_in_memory=True,
-                                                error=f"{model_output.action[ri].model_dump_json(exclude_unset=True)} is Failed to execute. \
-                                                    Something new appeared after action {model_output.action[len(result) - 1].model_dump_json(exclude_unset=True)}",
+                                                error=f"{actions[ri].model_dump_json(exclude_unset=True)} is Failed to execute. \
+                                                    Something new appeared after action {actions[len(result) - 1].model_dump_json(exclude_unset=True)}",
                                                 is_done=False))
+            if len(actions) == 0:
+                # TODO: fix no action case
+                result = [ActionResult(is_done=True, extracted_content=step_info.memory, include_in_memory=True)]
             self._last_result = result
-            self._last_actions = model_output.action
-            
+            self._last_actions = actions
             if len(result) > 0 and result[-1].is_done:
                 logger.info(f"📄 Result: {result[-1].extracted_content}")
 
@@ -551,9 +542,9 @@ class CustomAgentV2(CustomAgent):
             max_failures: int = 5,
             retry_delay: int = 10,
             system_prompt_class: Type[SystemPrompt] = SystemPrompt,
-            state_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
+            agent_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
             monitor_system_prompt_class: Type[SystemPrompt] = SystemPrompt,
-            monitor_state_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
+            monitor_agent_prompt_class: Type[AgentMessagePrompt] = AgentMessagePrompt,
             max_input_tokens: int = 128000,
             validate_output: bool = False,
             include_attributes: list[str] = [
@@ -590,7 +581,7 @@ class CustomAgentV2(CustomAgent):
             max_failures=max_failures,
             retry_delay=retry_delay,
             system_prompt_class=system_prompt_class,
-            state_prompt_class=state_prompt_class,
+            agent_prompt_class=agent_prompt_class,
             max_input_tokens=max_input_tokens,
             validate_output=validate_output,
             include_attributes=include_attributes,
@@ -616,7 +607,7 @@ class CustomAgentV2(CustomAgent):
         )
         # monitor agent
         self.monitor_system_prompt_class = monitor_system_prompt_class
-        self.monitor_state_prompt_class = monitor_state_prompt_class
+        self.monitor_agent_prompt_class = monitor_agent_prompt_class
         self.monitor_llm = monitor_llm
         self.monitor_use_vision = monitor_use_vision
         self.monitor_message_manager = CustomMassageManager(
@@ -624,7 +615,7 @@ class CustomAgentV2(CustomAgent):
             task=self.task,
             action_descriptions=self.controller.registry.get_prompt_description(),
             system_prompt_class=self.monitor_system_prompt_class,
-            state_prompt_class=self.monitor_state_prompt_class,
+            agent_prompt_class=self.monitor_agent_prompt_class,
             max_input_tokens=self.max_input_tokens,
             include_attributes=self.include_attributes,
             max_error_length=self.max_error_length,
@@ -720,18 +711,28 @@ class CustomAgentV2(CustomAgent):
             monitor_state = await self.browser_context.get_state(use_vision=self.monitor_use_vision)
             self.monitor_message_manager.add_state_message(monitor_state, self._last_actions, self._last_result, step_info)
             monitor_input_messages = self.monitor_message_manager.get_messages()
-            monitor_ouput = await self.get_monitor_result(monitor_input_messages)
-            self.monitor_message_manager._remove_state_message_by_index(-3)
-            self.update_step_info(monitor_ouput, step_info)
+            try:
+                monitor_ouput = await self.get_monitor_result(monitor_input_messages)
+                self.monitor_message_manager._remove_state_message_by_index(-1)
+                self.update_step_info(monitor_ouput, step_info)
+            except Exception as e:
+                # model call failed, remove last state message from history
+                self.monitor_message_manager._remove_state_message_by_index(-1)
+                raise e
             
+            state = await self.browser_context.get_state(use_vision=self.use_vision)
             if step_info.is_done.startswith("No"):
-                state = await self.browser_context.get_state(use_vision=self.use_vision)
                 self.message_manager.add_state_message(state, self._last_actions, self._last_result, step_info)
                 input_messages = self.message_manager.get_messages()
-                model_output = await self.get_next_action(input_messages)
-                self.message_manager._remove_state_message_by_index(-1)
-                self._log_response(model_output, step_info=step_info)
-                self._save_conversation(input_messages, model_output)
+                try:
+                    model_output = await self.get_next_action(input_messages)
+                    self.message_manager._remove_state_message_by_index(-1)
+                    self._log_response(model_output, step_info=step_info)
+                    self._save_conversation(input_messages, model_output)
+                except Exception as e:
+                    # model call failed, remove last state message from history
+                    self.message_manager._remove_state_message_by_index(-1)
+                    raise e
                 result: list[ActionResult] = await self.controller.multi_act(
                     model_output.action, self.browser_context
                 )
@@ -754,6 +755,9 @@ class CustomAgentV2(CustomAgent):
                     include_in_memory=True,
                     extracted_content='-'.join(step_info.is_done.split('-')[1:])
                 )]
+                logger.info(f"📄 Result: {result[-1].extracted_content}")
+                self._last_actions = None
+                self._last_result = result
                 
             self.consecutive_failures = 0
             
