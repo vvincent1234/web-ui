@@ -114,12 +114,12 @@ playwright install
          CHROME_PATH="C:\Program Files\Google\Chrome\Application\chrome.exe"
          CHROME_USER_DATA="C:\Users\YourUsername\AppData\Local\Google\Chrome\User Data"
         ```
-        > Note: Replace `YourUsername` with your actual Windows username for Windows systems.
       - Mac
         ```env
          CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
          CHROME_USER_DATA="/Users/YourUsername/Library/Application Support/Google/Chrome"
         ```
+         > Note: Replace `YourUsername` with your actual Windows username for Windows systems.
     - Close all Chrome windows
     - Open the WebUI in a non-Chrome browser, such as Firefox or Edge. This is important because the persistent browser context will use the Chrome data when running the agent.
     - Check the "Use Own Browser" option within the Browser Settings.
