@@ -638,7 +638,7 @@ class CustomAgentV2(CustomAgent):
         """
         if step_info is None:
             return
-        
+        step_info.step_number += 1
         if model_output.get("prev_action_evaluation", ""):
             step_info.prev_action_evaluation = model_output["prev_action_evaluation"]
         if model_output.get("important_contents", []):
@@ -687,9 +687,9 @@ class CustomAgentV2(CustomAgent):
         """Get next action from LLM based on current state"""
         ai_message = self.monitor_llm.invoke(input_messages)
         self.monitor_message_manager._add_message_with_tokens(ai_message)
-        logger.info(f"🤯 Start Deep Thinking: ")
+        logger.info(f"🤯 Start Monitor Deep Thinking: ")
         logger.info(ai_message.reasoning_content)
-        logger.info(f"🤯 End Deep Thinking")
+        logger.info(f"🤯 End Monitor Deep Thinking")
         if isinstance(ai_message.content, list):
             ai_content = ai_message.content[0].replace("```json", "").replace("```", "")
         else:

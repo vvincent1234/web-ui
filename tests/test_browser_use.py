@@ -248,11 +248,11 @@ async def test_browser_use_custom_v2():
     window_w, window_h = 1920, 1080
 
     llm = utils.get_llm_model(
-        provider="ollama", model_name="qwen2.5:7b", temperature=0.5
+        provider="ollama", model_name="deepseek-r1:14b", temperature=0.5
     )
     
     llm_monitor = utils.get_llm_model(
-        provider="ollama", model_name="deepseek-r1:7b", temperature=0.5
+        provider="ollama", model_name="deepseek-r1:14b", temperature=0.5
     )
 
     controller = CustomController()
@@ -291,7 +291,7 @@ async def test_browser_use_custom_v2():
             )
         )
         agent = CustomAgentV2(
-            task="give stock price of Nvidia, send it to 1450060993@qq.com via Gmail.",
+            task="go to google.com and type 'OpenAI' click search and give me the first url.",
             add_infos="",  # some hints for llm to complete the task
             llm=llm,
             monitor_llm=llm_monitor,
